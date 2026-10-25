@@ -14,7 +14,7 @@ import type { OnnxVariant } from './detectors/onnx.ts'
 import { KEY_RE, findLedger, ledgerPath, readLedger, saveLedger, sha256, storeDir } from './ledger.ts'
 import type { Ledger } from './ledger.ts'
 import { anonymize } from './pipeline.ts'
-import { restore } from './placeholders.ts'
+import { restore } from './restore.ts'
 import type { Stammdaten } from './types.ts'
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }

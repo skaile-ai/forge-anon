@@ -9,11 +9,12 @@ import type { Detector } from './detectors/types.ts'
 import { FakeNames } from './fake-names.ts'
 import { overlaps, protectedSpans } from './markdown.ts'
 import type { Range } from './markdown.ts'
-import { getStyle, restore } from './placeholders.ts'
+import { getStyle } from './placeholders.ts'
+import { restore } from './restore.ts'
 import type { PlaceholderStyle } from './placeholders.ts'
 import { addCandidate, buildRules, findRuleHits, residualScan } from './rules.ts'
 import type { Candidate } from './rules.ts'
-import { AFTER, BEFORE, literal, maskPlaceholders } from './text.ts'
+import { AFTER, BEFORE, escapeRe, literal, maskPlaceholders } from './text.ts'
 import { kindGroup } from './types.ts'
 import type { DetectorName, Entity, EntityKind, Hit, Rule, Span, Stammdaten } from './types.ts'
 
@@ -24,6 +25,14 @@ export type AnonymizeOptions = {
   /** Required for the `llm` detector (it only runs when `config.detectors.llm.enabled` and `chat` is given). */
   chat?: NerChat
   manual?: { text: string; kind: EntityKind; placeholder?: string }[]
+  /**
+   * Placeholders already handed out (e.g. earlier turns of one conversation). An original in the mapping keeps
+   * its placeholder wherever it occurs, whether or not a detector fires on it; new originals get fresh tokens
+   * that collide neither with the text nor with the mapping. `result.entities` is the union (mapping entities
+   * absent from this text keep `occurrences: 0`). Matching is on the exact original: another spelling
+   * ("MÜLLER" vs "Müller") is a new entity so that `restore` stays exact.
+   */
+  mapping?: readonly Entity[]
   /** Test injection: token-classification pipeline for the `onnx` detector. */
   onnxPipeline?: unknown
   /** Replaces the config-built detector list (tests/eval). Rules and manual entries still apply. */
@@ -93,6 +102,32 @@ function resolveOverlaps(spans: Span[], length: number): Span[] {
   return kept.sort((a, b) => a.start - b.start)
 }
 
+/** Entities of the mapping, first one per placeholder (restore semantics). */
+function uniqueMapping(mapping: readonly Entity[] | undefined): Entity[] {
+  const seen = new Set<string>()
+  const out: Entity[] = []
+  for (const e of mapping ?? []) {
+    if (!e.placeholder || seen.has(e.placeholder)) continue
+    seen.add(e.placeholder)
+    out.push(e)
+  }
+  return out
+}
+
+const WORD_START = /^[\p{L}\p{N}_]/u
+const WORD_END = /[\p{L}\p{N}_]$/u
+
+/** One regex over the exact originals of the mapping (longest first); word boundaries only where the original has a word edge. */
+function seedMapping(mapping: readonly Entity[] | undefined): { re?: RegExp; byOriginal: Map<string, Entity> } {
+  const byOriginal = new Map<string, Entity>()
+  for (const e of uniqueMapping(mapping)) if (e.original.trim() && !byOriginal.has(e.original)) byOriginal.set(e.original, e)
+  if (byOriginal.size === 0) return { byOriginal }
+  const alts = [...byOriginal.keys()]
+    .sort((a, b) => b.length - a.length)
+    .map(o => `${WORD_START.test(o) ? BEFORE : ''}${escapeRe(o)}${WORD_END.test(o) ? AFTER : ''}`)
+  return { re: new RegExp(alts.map(a => `(?:${a})`).join('|'), 'gu'), byOriginal }
+}
+
 type Run = { style: PlaceholderStyle; spans: Span[]; review: Span[]; detectors: DetectorName[]; rules: Rule[] }
 
 async function run(text: string, opts: AnonymizeOptions, style: PlaceholderStyle): Promise<Run> {
@@ -142,6 +177,24 @@ async function run(text: string, opts: AnonymizeOptions, style: PlaceholderStyle
         score: 1,
         detector: 'manual',
         placeholder: m.placeholder
+      })
+    }
+  }
+
+  // Known mapping: every exact occurrence of an already tokenised original, with its placeholder. Same rank as
+  // `manual`, so on equal length the known placeholder wins; a longer detector span still wins as everywhere.
+  const seeded = seedMapping(opts.mapping)
+  if (seeded.re) {
+    for (const x of masked.matchAll(seeded.re)) {
+      const e = seeded.byOriginal.get(x[0])!
+      all.push({
+        start: x.index!,
+        end: x.index! + x[0].length,
+        text: x[0],
+        kind: e.kind,
+        score: 1,
+        detector: 'manual',
+        placeholder: e.placeholder
       })
     }
   }
@@ -240,8 +293,11 @@ function groupSpans(spans: Span[], rules: Rule[]): { units: Unit[]; unitOf: Unit
   return { units: [...units.values()], unitOf }
 }
 
-function assignSemantic(units: Unit[], rules: Rule[], style: PlaceholderStyle): void {
-  const registry: Rule[] = [...rules]
+function assignSemantic(units: Unit[], rules: Rule[], mapping: readonly Entity[], style: PlaceholderStyle): void {
+  const registry: Rule[] = [
+    ...rules,
+    ...mapping.map(e => ({ placeholder: e.placeholder, original: e.original, kind: e.kind, pattern: NEVER, source: e.detector }))
+  ]
   const known = new Set(registry.map(r => r.placeholder))
   for (const u of units) {
     if (u.fixed) {
@@ -262,9 +318,9 @@ function assignSemantic(units: Unit[], rules: Rule[], style: PlaceholderStyle): 
   }
 }
 
-function assignTokens(units: Unit[], text: string, style: PlaceholderStyle, fakeNames: boolean): void {
+function assignTokens(units: Unit[], text: string, style: PlaceholderStyle, fakeNames: boolean, taken: ReadonlySet<string>): void {
   const fake = fakeNames ? new FakeNames(text) : undefined
-  const used = new Set<string>()
+  const used = new Set<string>(taken)
   for (const u of units) {
     let p: string | undefined
     if (fake && kindGroup(u.kind) === 'NAME' && (u.fixed === undefined || u.fromRule)) {
@@ -272,6 +328,8 @@ function assignTokens(units: Unit[], text: string, style: PlaceholderStyle, fake
       if (f !== u.original && !used.has(f)) p = f
     }
     p ??= u.fixed ?? style.token(u.kind)
+    // A drawn token must not be one the mapping already owns.
+    if (u.fixed === undefined) for (let i = 0; i < MAX_ATTEMPTS && taken.has(p); i++) p = style.token(u.kind)
     u.placeholder = p
     used.add(p)
   }
@@ -282,17 +340,28 @@ export async function anonymize(text: string, opts: AnonymizeOptions): Promise<A
   const fakeNames = opts.config.placeholders.fakeNames
   if (fakeNames && style.name === 'semantic') throw new Error('fakeNames ist mit style=semantic nicht kombinierbar')
 
+  const known = uniqueMapping(opts.mapping)
+  const taken = new Set(known.map(e => e.placeholder))
+  const inText = known.find(e => text.includes(e.placeholder))
+  if (inText) throw new Error(`Platzhalter-Kollision: ${inText.placeholder} kommt bereits im Quelltext vor`)
+
   const r = await run(text, opts, style)
   const { units, unitOf } = groupSpans(r.spans, r.rules)
 
   for (let attempt = 1; ; attempt++) {
-    if (style.name === 'semantic') assignSemantic(units, r.rules, style)
-    else assignTokens(units, text, style, fakeNames)
+    if (style.name === 'semantic') assignSemantic(units, r.rules, known, style)
+    else assignTokens(units, text, style, fakeNames, taken)
 
     const collided = units.filter(u => text.includes(u.placeholder))
-    const entities: Entity[] = units.map(u => ({
+    const found = units.map((u): Entity => ({
       placeholder: u.placeholder, original: u.original, kind: u.kind, detector: u.detector, occurrences: u.occurrences
     }))
+    // Union: the mapping (this text's occurrence counts, 0 when absent) followed by the new entities.
+    const counts = new Map(found.map(e => [e.placeholder, e.occurrences]))
+    const entities: Entity[] = [
+      ...known.map(e => ({ ...e, occurrences: counts.get(e.placeholder) ?? 0 })),
+      ...found.filter(e => !taken.has(e.placeholder))
+    ]
 
     let out = ''
     let expected = ''

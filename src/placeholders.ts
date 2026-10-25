@@ -92,16 +92,3 @@ export function candidatePrefix(kind: EntityKind): string {
   if (kind === 'PROFESSION') return 'beruf'
   return 'sonstiges'
 }
-
-/**
- * Replaces every placeholder by its original. First mapping per placeholder wins; longer placeholders
- * are replaced first so a placeholder that is a prefix of another cannot corrupt it.
- */
-export function restore(text: string, entities: { placeholder: string; original: string }[]): string {
-  const map = new Map<string, string>()
-  for (const e of entities) if (!map.has(e.placeholder)) map.set(e.placeholder, e.original)
-  const keys = [...map.keys()].sort((a, b) => b.length - a.length)
-  let out = text
-  for (const p of keys) if (p) out = out.split(p).join(map.get(p)!)
-  return out
-}

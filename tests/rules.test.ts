@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { addCandidate, applyRules, buildRules, residualScan, toMapping } from '../src/rules.ts'
-import { gemtexStyle, restore, semanticStyle } from '../src/placeholders.ts'
+import { gemtexStyle, semanticStyle } from '../src/placeholders.ts'
+import { restore } from '../src/restore.ts'
 import type { Stammdaten } from '../src/types.ts'
 
 // Ausschließlich erfundene Daten.

@@ -203,14 +203,37 @@ restore(result.text, result.entities) === text
 
 |Export|Purpose|
 |---|---|
-|`anonymize(text, opts)` / `detect(text, opts)`|full pipeline / spans only. `opts`: `config`, `stammdaten?`, `markdown?`, `chat?` (required for the `llm` detector), `manual?`|
-|`restore(text, entities)`|placeholder → original (first mapping per placeholder wins, longest placeholder first)|
+|`anonymize(text, opts)` / `detect(text, opts)`|full pipeline / spans only. `opts`: `config`, `stammdaten?`, `markdown?`, `chat?` (required for the `llm` detector), `manual?`, `mapping?` (placeholders already handed out)|
+|`restore(text, entities, { lenient? })`|placeholder → original in one pass (first mapping per placeholder wins, longest placeholder first, replaced text is never rescanned); `lenient: true` also restores LLM-mangled tokens, see below|
 |`loadConfig({ path?, cwd?, env? })`, `applyCliOverrides(config, flags)`|config layers; flag mapping|
 |`buildRules(stammdaten)`, `applyRules(text, rules)`, `addCandidate(rules, candidate, style)`, `residualScan(text, stammdaten, style)`, `toMapping(rules)`|Stammdaten rule layer with semantic placeholders|
 |`findCandidates(text, { chat, placeholderPattern })`, `toRules(...)`, `openAiCompatibleChat(opts)`, `contextSnippet(text, index, length)`|LLM NER; `chat` is injected, so the caller owns transport and logging; `contextSnippet` builds the review contexts shown for each candidate|
 |`regexDetector`, `onnxDetector`, `llmDetector`|individual detectors (`Detector.detect(text, { masked })`)|
 |`saveLedger`, `findLedger`, `readLedger`, `sha256`|ledger store|
 |`semanticStyle`, `presidioStyle`, `llmGuardStyle`, `gemtexStyle`, `getStyle`|placeholder styles|
+|`createAnonSession(opts)`, `createStreamRestorer(entities, opts?)`|conversation mapping and streamed restore, see below|
+
+## Library: sessions and streaming
+
+A conversation anonymizes many texts with one mapping: an original keeps its placeholder in every later text.
+
+```ts
+import { createAnonSession } from '@ecsplico/anon'
+
+const session = createAnonSession({ config })       // detectors (and the ONNX model) are built once
+const a = await session.anonymize('Herr Müller, geb. 12.03.1970')
+const b = await session.anonymize('Was hat Müller gesagt?')   // same placeholder for Müller as in `a`
+session.entities                                    // cumulative mapping, occurrences summed
+session.restore(llmAnswer)                          // lenient restore
+const r = session.streamRestorer()                  // for streamed answers
+for await (const delta of llmStream) out += r.push(delta)
+out += r.flush()
+```
+
+- `anonymize(text, { mapping })` is the primitive underneath: known originals (exact text, word boundaries) keep their placeholder with or without a detector hit; new originals get fresh tokens that collide neither with the text nor with the mapping; `result.entities` is the union, `occurrences` counted for this text (`0` for mapping entries not in it). Another spelling of a known original ("MÜLLER") is a new entity so that `restore` stays exact. A longer detector span ("Herr Müller") wins over a shorter known original.
+- `session.anonymize` calls run one after another, so overlapping calls never draw two tokens for the same new original.
+- `restore(text, entities, { lenient: true })` (used by the session) also restores tokens of the styles `presidio`, `llm-guard` and `gemtex` without their brackets (`NAME_PATIENT_ab12cd34`), with HTML-escaped brackets (`&lt;…&gt;`) and with upper-case random part; wrapping such as backticks or `**` stays. `semantic` placeholders are always exact. The CLI keeps exact restore.
+- `createStreamRestorer(entities, { lenient? })`: `push(chunk)` returns the restored text that is final and holds back a trailing piece that could still become a placeholder; `flush()` returns the rest. For every chunking, `push(c1) + … + push(cn) + flush() === restore(text, entities, opts)`. The session's restorer is bound to the mapping at the time of the call.
 
 ## Ledger
 

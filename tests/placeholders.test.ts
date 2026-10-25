@@ -7,9 +7,9 @@ import {
   getStyle,
   llmGuardStyle,
   presidioStyle,
-  restore,
   semanticStyle
 } from '../src/placeholders.ts'
+import { restore } from '../src/restore.ts'
 import { addCandidate, applyRules, buildRules } from '../src/rules.ts'
 import { ENTITY_KINDS, kindGroup } from '../src/types.ts'
 import { maskPlaceholders } from '../src/text.ts'
@@ -126,6 +126,75 @@ describe('restore', () => {
   test('unknown placeholders stay, empty mapping is a no-op', () => {
     expect(restore('{{x}} text', [])).toBe('{{x}} text')
     expect(restore('{{x}}', [{ placeholder: '', original: 'boom' }])).toBe('{{x}}')
+  })
+
+  test('replaced text is never rescanned', () => {
+    const e = [
+      { placeholder: '<NAME_EXT_1234abcd>', original: '<DATE_1111aaaa>' },
+      { placeholder: '<DATE_1111aaaa>', original: '12.03.2011' }
+    ]
+    expect(restore('<NAME_EXT_1234abcd> <DATE_1111aaaa>', e)).toBe('<DATE_1111aaaa> 12.03.2011')
+  })
+})
+
+describe('restore lenient', () => {
+  const lenient = { lenient: true }
+  const presidio = [{ placeholder: '<NAME_PATIENT_ab12cd34>', original: 'Anna Müller' }]
+  const cases: [string, string][] = [
+    ['<NAME_PATIENT_ab12cd34>', 'Anna Müller'],
+    ['NAME_PATIENT_ab12cd34', 'Anna Müller'],
+    ['&lt;NAME_PATIENT_ab12cd34&gt;', 'Anna Müller'],
+    ['<NAME_PATIENT_AB12CD34>', 'Anna Müller'],
+    ['NAME_PATIENT_AB12CD34', 'Anna Müller'],
+    ['`<NAME_PATIENT_ab12cd34>`', '`Anna Müller`'],
+    ['**<NAME_PATIENT_ab12cd34>**', '**Anna Müller**'],
+    ['`NAME_PATIENT_ab12cd34`', '`Anna Müller`'],
+    ['Frau<NAME_PATIENT_ab12cd34>s', 'FrauAnna Müllers'],
+    ['<NAME_PATIENT_ab12cd34 und', 'Anna Müller und'],
+    ['NAME_PATIENT_ab12cd34>', 'Anna Müller']
+  ]
+  for (const [input, expected] of cases) {
+    test(`restores ${input}`, () => expect(restore(input, presidio, lenient)).toBe(expected))
+  }
+
+  test('the default stays exact', () => {
+    expect(restore('NAME_PATIENT_ab12cd34 &lt;NAME_PATIENT_ab12cd34&gt; <NAME_PATIENT_AB12CD34>', presidio)).toBe(
+      'NAME_PATIENT_ab12cd34 &lt;NAME_PATIENT_ab12cd34&gt; <NAME_PATIENT_AB12CD34>'
+    )
+  })
+
+  test('a bare token inside a longer word or identifier is left alone', () => {
+    expect(restore('xNAME_PATIENT_ab12cd34 NAME_PATIENT_ab12cd34x NAME_PATIENT_ab12cd345', presidio, lenient)).toBe(
+      'xNAME_PATIENT_ab12cd34 NAME_PATIENT_ab12cd34x NAME_PATIENT_ab12cd345'
+    )
+  })
+
+  test('another hex part or kind is not matched', () => {
+    expect(restore('NAME_PATIENT_ab12cd35 NAME_DOCTOR_ab12cd34', presidio, lenient)).toBe('NAME_PATIENT_ab12cd35 NAME_DOCTOR_ab12cd34')
+  })
+
+  test('llm-guard and gemtex tokens', () => {
+    const e = [
+      { placeholder: '[REDACTED_ID_deadbeef]', original: 'A-4711' },
+      { placeholder: '[** LOCATION_CITY K3J9QZ **]', original: 'Berlin' }
+    ]
+    expect(restore('[REDACTED_ID_DEADBEEF] REDACTED_ID_deadbeef `[REDACTED_ID_deadbeef]`', e, lenient)).toBe('A-4711 A-4711 `A-4711`')
+    expect(restore('[** LOCATION_CITY K3J9QZ **] LOCATION_CITY K3J9QZ location', e, lenient)).toBe('Berlin Berlin location')
+    expect(restore('LOCATION_CITY k3j9qz', e, lenient)).toBe('Berlin')
+  })
+
+  test('semantic placeholders stay exact', () => {
+    const e = [{ placeholder: '{{person1}}', original: 'Anna' }]
+    expect(restore('{{person1}} person1 {{PERSON1}} {person1}', e, lenient)).toBe('Anna person1 {{PERSON1}} {person1}')
+  })
+
+  test('many entities of different kinds in one text', () => {
+    const e = [
+      { placeholder: '<NAME_PATIENT_ab12cd34>', original: 'A' },
+      { placeholder: '<NAME_DOCTOR_0f9e8d7c>', original: 'B' },
+      { placeholder: '<ID_0f9e8d7c>', original: 'C' }
+    ]
+    expect(restore('ID_0f9e8d7c NAME_DOCTOR_0F9E8D7C <NAME_PATIENT_ab12cd34>', e, lenient)).toBe('C B A')
   })
 })
 

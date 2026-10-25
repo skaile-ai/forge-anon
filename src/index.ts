@@ -21,10 +21,11 @@ export {
   getStyle,
   llmGuardStyle,
   presidioStyle,
-  restore,
   semanticStyle
 } from './placeholders.ts'
 export type { CreateStyleOptions, PlaceholderStyle, StyleName } from './placeholders.ts'
+export { createStreamRestorer, restore } from './restore.ts'
+export type { RestoreOptions, StreamRestorer } from './restore.ts'
 
 export { addCandidate, applyRules, buildRules, residualScan, toMapping } from './rules.ts'
 export type { Candidate } from './rules.ts'
@@ -76,3 +77,5 @@ export { findRuleHits } from './rules.ts'
 export type { RuleHit } from './rules.ts'
 export { anonymize, buildDetectors, detect } from './pipeline.ts'
 export type { AnonymizeOptions, AnonymizeResult, DetectResult } from './pipeline.ts'
+export { createAnonSession } from './session.ts'
+export type { AnonSession, AnonSessionOptions } from './session.ts'
