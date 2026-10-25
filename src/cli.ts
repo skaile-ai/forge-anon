@@ -27,7 +27,7 @@ program
   .name('anon')
   .description('Deutsche klinische Texte reversibel anonymisieren (Stammdaten-Regeln, Regex, lokales ONNX-NER, lokales LLM-NER)')
   .version(pkg.version)
-  .option('--config <path>', 'Konfigurationsdatei (überschreibt ~/.config/anon/config.yaml und ./anon.config.yaml)')
+  .option('--config <path>', 'Konfigurationsdatei (überschreibt ~/.config/forge-anon/config.yaml und ./anon.config.yaml)')
   .option('--detectors <list>', 'Detektoren, kommagetrennt aus rules,regex,onnx,llm (setzt enabled exakt)')
   .option('--no-regex', 'Regex-Detektor abschalten')
   .option('--no-onnx', 'ONNX-Detektor abschalten')

@@ -69,7 +69,7 @@ export const DEFAULT_CONFIG: AnonConfig = {
       threshold: 0.3,
       chunkChars: 900,
       localFilesOnly: false,
-      cacheDir: '~/.cache/ecsplico-anon/models',
+      cacheDir: '~/.cache/forge-anon/models',
       entities: [
         'NAME_EXT',
         'DATE_BIRTH',
@@ -102,7 +102,7 @@ export const DEFAULT_CONFIG: AnonConfig = {
   placeholders: { style: 'presidio', fakeNames: false },
   review: { kinds: ['AGE', 'PROFESSION', 'OTHER'] },
   markdown: { protect: true },
-  ledger: { dir: '~/.clinico-anon/ledgers', save: false },
+  ledger: { dir: '~/.local/share/forge-anon/ledgers', save: false },
 }
 
 export function expandHome(p: string, home: string = os.homedir()): string {
@@ -172,7 +172,7 @@ export type LoadConfigOptions = {
   home?: string
 }
 
-/** Layers, lowest first: defaults → `<home>/.config/anon/config.yaml` → `<cwd>/anon.config.yaml` → explicit path / `ANON_CONFIG`. */
+/** Layers, lowest first: defaults → `<home>/.config/forge-anon/config.yaml` → `<cwd>/anon.config.yaml` → explicit path / `ANON_CONFIG`. */
 export function loadConfig(opts: LoadConfigOptions = {}): { config: AnonConfig; sources: string[] } {
   const home = opts.home ?? os.homedir()
   const cwd = opts.cwd ?? process.cwd()
@@ -181,7 +181,7 @@ export function loadConfig(opts: LoadConfigOptions = {}): { config: AnonConfig; 
   const explicit = explicitRaw ? path.resolve(cwd, expandHome(explicitRaw, home)) : undefined
 
   const candidates: { file: string; required: boolean }[] = [
-    { file: path.join(home, '.config', 'anon', 'config.yaml'), required: false },
+    { file: path.join(home, '.config', 'forge-anon', 'config.yaml'), required: false },
     { file: path.join(cwd, 'anon.config.yaml'), required: false },
   ]
   if (explicit) candidates.push({ file: explicit, required: true })

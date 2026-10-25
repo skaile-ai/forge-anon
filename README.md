@@ -1,4 +1,4 @@
-# @ecsplico/anon
+# @skaile/forge-anon
 
 Reversible anonymization for German clinical text (discharge letters, reports): patient, relatives, therapists, schools, places, dates, contact data and IDs. TypeScript library plus the `anon` command.
 
@@ -16,13 +16,25 @@ A residual scan against the Stammdaten reports leaks that survived (inflected or
 ## Install
 
 ```sh
-npm i -g @ecsplico/anon        # or: bun install -g @ecsplico/anon
+npm i -g @skaile/forge-anon        # or: bun install -g @skaile/forge-anon
 anon --help
 
-npm i @ecsplico/anon           # as a library
+npm i @skaile/forge-anon           # as a library
 ```
 
-Node ≥ 22. The first run with the `onnx` detector downloads the default model (about 270 MB, FP16) to `~/.cache/ecsplico-anon/models`; later runs work offline (`localFilesOnly: true` forbids the download).
+Node ≥ 22. The first run with the `onnx` detector downloads the default model (about 270 MB, FP16) to `~/.cache/forge-anon/models`; later runs work offline (`localFilesOnly: true` forbids the download).
+
+## Upgrading
+
+### 0.2 → 0.3
+
+The package is now `@skaile/forge-anon` (was `@ecsplico/anon`). The `anon` command is unchanged. Three directories moved; the old paths are **not** read any more, so move your data once:
+
+```sh
+mkdir -p ~/.local/share/forge-anon && mv ~/.clinico-anon/ledgers ~/.local/share/forge-anon/ledgers   # ledgers
+mkdir -p ~/.cache/forge-anon && mv ~/.cache/ecsplico-anon/models ~/.cache/forge-anon/models          # ONNX model cache
+mkdir -p ~/.config/forge-anon && mv ~/.config/anon/config.yaml ~/.config/forge-anon/config.yaml      # user config
+```
 
 ## CLI
 
@@ -116,7 +128,7 @@ llm    enabled  url=http://127.0.0.1:8000/v1 reachable=yes
 
 ## Configuration
 
-Layers, lowest first, deep-merged (objects merge; arrays and scalars replace): built-in defaults → `~/.config/anon/config.yaml` → `./anon.config.yaml` → `--config <path>` / `$ANON_CONFIG` → CLI flags. A malformed file is an error naming the file. `~` expands to the home directory.
+Layers, lowest first, deep-merged (objects merge; arrays and scalars replace): built-in defaults → `~/.config/forge-anon/config.yaml` → `./anon.config.yaml` → `--config <path>` / `$ANON_CONFIG` → CLI flags. A malformed file is an error naming the file. `~` expands to the home directory.
 
 ```yaml
 detectors:
@@ -132,7 +144,7 @@ detectors:
     threshold: 0.3
     chunkChars: 900                        # characters per model call (models truncate at 512 tokens)
     localFilesOnly: false                  # true: never download
-    cacheDir: ~/.cache/ecsplico-anon/models
+    cacheDir: ~/.cache/forge-anon/models
     entities: [NAME_EXT, DATE_BIRTH, DATE, AGE, CONTACT_EMAIL, CONTACT_PHONE, CONTACT_URL, CONTACT_IP,
                LOCATION_CITY, LOCATION_STATE, LOCATION_STREET, LOCATION_ZIP, LOCATION_OTHER,
                LOCATION_ORGANIZATION, PROFESSION, ID]
@@ -147,7 +159,7 @@ detectors:
 placeholders: { style: presidio, fakeNames: false }
 review: { kinds: [AGE, PROFESSION, OTHER] }  # detected, reported, not replaced
 markdown: { protect: true }
-ledger: { dir: ~/.clinico-anon/ledgers, save: false }   # $ANON_LEDGER_DIR wins over dir
+ledger: { dir: ~/.local/share/forge-anon/ledgers, save: false }   # $ANON_LEDGER_DIR wins over dir
 ```
 
 ### Placeholder styles
@@ -187,7 +199,7 @@ import {
   buildRules, applyRules, addCandidate, residualScan, toMapping,
   findCandidates, toRules, openAiCompatibleChat,
   semanticStyle, saveLedger, findLedger, readLedger,
-} from '@ecsplico/anon'
+} from '@skaile/forge-anon'
 
 const { config } = loadConfig({ cwd: process.cwd() })
 const result = await anonymize(text, {
@@ -203,7 +215,7 @@ restore(result.text, result.entities) === text
 
 |Export|Purpose|
 |---|---|
-|`anonymize(text, opts)` / `detect(text, opts)`|full pipeline / spans only. `opts`: `config`, `stammdaten?`, `markdown?`, `chat?` (required for the `llm` detector), `manual?`, `mapping?` (placeholders already handed out)|
+|`anonymize(text, opts)` / `detect(text, opts)`|full pipeline / spans only. `opts`: `config`, `stammdaten?`, `markdown?`, `protect?` (`RegExp[]`: matches are never anonymized by any detector, with or without `markdown`; no `g` flag needed, empty matches ignored), `chat?` (required for the `llm` detector), `manual?`, `mapping?` (placeholders already handed out)|
 |`restore(text, entities, { lenient? })`|placeholder → original in one pass (first mapping per placeholder wins, longest placeholder first, replaced text is never rescanned); `lenient: true` also restores LLM-mangled tokens, see below|
 |`loadConfig({ path?, cwd?, env? })`, `applyCliOverrides(config, flags)`|config layers; flag mapping|
 |`buildRules(stammdaten)`, `applyRules(text, rules)`, `addCandidate(rules, candidate, style)`, `residualScan(text, stammdaten, style)`, `toMapping(rules)`|Stammdaten rule layer with semantic placeholders|
@@ -211,6 +223,8 @@ restore(result.text, result.entities) === text
 |`regexDetector`, `onnxDetector`, `llmDetector`|individual detectors (`Detector.detect(text, { masked })`)|
 |`saveLedger`, `findLedger`, `readLedger`, `sha256`|ledger store|
 |`semanticStyle`, `presidioStyle`, `llmGuardStyle`, `gemtexStyle`, `getStyle`|placeholder styles|
+|`patternSpans(text, patterns)`, `mergeSpans(...lists)`, `protectedSpans(text)`, `overlaps(start, end, spans)`|protected-range helpers behind `protect` and `markdown`: sorted, merged `[start, end)` ranges|
+|`BLOCK_ID_PATTERN`|UUID v4 (editor block ids) as a `protect` pattern|
 |`createAnonSession(opts)`, `createStreamRestorer(entities, opts?)`|conversation mapping and streamed restore, see below|
 
 ## Library: sessions and streaming
@@ -218,7 +232,7 @@ restore(result.text, result.entities) === text
 A conversation anonymizes many texts with one mapping: an original keeps its placeholder in every later text.
 
 ```ts
-import { createAnonSession } from '@ecsplico/anon'
+import { createAnonSession } from '@skaile/forge-anon'
 
 const session = createAnonSession({ config })       // detectors (and the ONNX model) are built once
 const a = await session.anonymize('Herr Müller, geb. 12.03.1970')
@@ -230,14 +244,39 @@ for await (const delta of llmStream) out += r.push(delta)
 out += r.flush()
 ```
 
+- `createAnonSession` takes `protect` like `anonymize` (`createAnonSession({ config, protect: [/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g] })` keeps UUIDs verbatim in every text). A detection that overlaps a protected match is dropped, also a longer one.
 - `anonymize(text, { mapping })` is the primitive underneath: known originals (exact text, word boundaries) keep their placeholder with or without a detector hit; new originals get fresh tokens that collide neither with the text nor with the mapping; `result.entities` is the union, `occurrences` counted for this text (`0` for mapping entries not in it). Another spelling of a known original ("MÜLLER") is a new entity so that `restore` stays exact. A longer detector span ("Herr Müller") wins over a shorter known original.
 - `session.anonymize` calls run one after another, so overlapping calls never draw two tokens for the same new original.
 - `restore(text, entities, { lenient: true })` (used by the session) also restores tokens of the styles `presidio`, `llm-guard` and `gemtex` without their brackets (`NAME_PATIENT_ab12cd34`), with HTML-escaped brackets (`&lt;…&gt;`) and with upper-case random part; wrapping such as backticks or `**` stays. `semantic` placeholders are always exact. The CLI keeps exact restore.
 - `createStreamRestorer(entities, { lenient? })`: `push(chunk)` returns the restored text that is final and holds back a trailing piece that could still become a placeholder; `flush()` returns the rest. For every chunking, `push(c1) + … + push(cn) + flush() === restore(text, entities, opts)`. The session's restorer is bound to the mapping at the time of the call.
 
+## Library: AI SDK (`@skaile/forge-anon/ai-sdk`)
+
+For hosts that call a model through the [AI SDK](https://ai-sdk.dev) (`ai` ^7, optional peers `ai` and `@ai-sdk/provider`): the model sees placeholders only and the answer comes back restored.
+
+```ts
+import { wrapLanguageModel } from 'ai'
+import { BLOCK_ID_PATTERN, loadConfig } from '@skaile/forge-anon'
+import { anonLanguageModelMiddleware, createAnonSessionStore } from '@skaile/forge-anon/ai-sdk'
+
+const store = createAnonSessionStore({ config: loadConfig().config, protect: [BLOCK_ID_PATTERN] })
+
+// per request, with the id of the user's chat session:
+const session = store.get(sessionId)
+const model = wrapLanguageModel({
+  model: baseModel,
+  middleware: anonLanguageModelMiddleware(session, { system: MY_SYSTEM_PROMPT, document: currentDocumentMarkdown })
+})
+```
+
+- `createAnonSessionStore({ config, idleTtlMs?, markdown?, protect? })` → `{ get(id, now?), drop(id), has(id), evictIdle(now) }`. Sessions live in memory only; one idle for longer than `idleTtlMs` (default one hour) is dropped on the next `get`/`evictIdle`. `markdown` defaults to `true`.
+- `anonLanguageModelMiddleware(session, { system, document?, documentLabel? })`: `system` is your prompt (tell the model that placeholders stand for real values and must be copied verbatim) and goes first as a system message; system messages already in the prompt follow unchanged. `document` is anonymized and appended as `<document>…</document>` below `documentLabel` (default `Das aktuelle Dokument des Nutzers:`).
+- Anonymized: every string leaf of user/assistant text, of assistant `tool-call` inputs (recursively) and of tool results. Restored: streamed text incrementally (a placeholder may straddle deltas; `text-end` flushes), `tool-call` inputs as parsed JSON (originals with `"` or `\` stay valid; unparsable input is restored as plain text). `tool-input-delta` parts pass through untouched, so act on the finished `tool-call`. If anonymizing fails, the model is never called.
+- `anonymizeJson(session, value)` / `restoreJson(session, value)`: the same leaf-wise mapping for your own JSON (object keys are never touched).
+
 ## Ledger
 
-`anon anonymize -s` writes `~/.clinico-anon/ledgers/<key>.yaml` (directory 0700, file 0600) with the source file name, creation time, style, detectors, SHA-256 of source and anonymized text, and every `placeholder → original` pair. Ledgers written by the earlier Python `clinico-anon` stay readable (`entity_type` is read as `kind`).
+`anon anonymize -s` writes `~/.local/share/forge-anon/ledgers/<key>.yaml` (directory 0700, file 0600) with the source file name, creation time, style, detectors, SHA-256 of source and anonymized text, and every `placeholder → original` pair. Ledgers written by the earlier Python `clinico-anon` stay readable (`entity_type` is read as `kind`).
 
 ## Privacy
 
@@ -274,7 +313,7 @@ Strict precision is low for the ONNX settings (about 30-57 % total), mostly boun
 bun install
 bun run typecheck
 bun test
-bun run build        # tsdown → dist/index.mjs, dist/cli.mjs
+bun run build        # tsdown → dist/index.mjs, dist/cli.mjs, dist/ai-sdk.mjs
 ```
 
 MIT licensed.

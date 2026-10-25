@@ -50,11 +50,11 @@ function save(dir: string, anonText: string, created: string) {
 }
 
 describe('store location', () => {
-  test('ANON_LEDGER_DIR wins, `~` expands, default is ~/.clinico-anon/ledgers', () => {
+  test('ANON_LEDGER_DIR wins, `~` expands, default is ~/.local/share/forge-anon/ledgers', () => {
     expect(storeDir({ ANON_LEDGER_DIR: '/tmp/somewhere' })).toBe('/tmp/somewhere')
     expect(storeDir({ ANON_LEDGER_DIR: '~/my-ledgers' })).toBe(join(homedir(), 'my-ledgers'))
-    expect(storeDir({})).toBe(join(homedir(), '.clinico-anon', 'ledgers'))
-    expect(storeDir({ ANON_LEDGER_DIR: '  ' })).toBe(join(homedir(), '.clinico-anon', 'ledgers'))
+    expect(storeDir({})).toBe(join(homedir(), '.local', 'share', 'forge-anon', 'ledgers'))
+    expect(storeDir({ ANON_LEDGER_DIR: '  ' })).toBe(join(homedir(), '.local', 'share', 'forge-anon', 'ledgers'))
   })
 
   test('sha256 is prefixed lowercase hex of the UTF-8 bytes', () => {

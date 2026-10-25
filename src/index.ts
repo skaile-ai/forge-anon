@@ -55,7 +55,7 @@ export type {
   OpenAiCompatibleChatOptions
 } from './detectors/llm.ts'
 
-export { overlaps, protectedSpans } from './markdown.ts'
+export { BLOCK_ID_PATTERN, mergeSpans, overlaps, patternSpans, protectedSpans } from './markdown.ts'
 export type { Range } from './markdown.ts'
 export { FakeNames } from './fake-names.ts'
 export type { FakeNamesOptions, FakerLike } from './fake-names.ts'

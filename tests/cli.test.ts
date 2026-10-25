@@ -1,7 +1,10 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+
+// Every test spawns the CLI one to three times (`Bun.spawnSync`); on a loaded machine that exceeds bun's 5 s default.
+setDefaultTimeout(30_000)
 
 const CLI = join(import.meta.dir, '..', 'src', 'cli.ts')
 const SOURCE = 'Kontakt: anna.mueller@example.de, Tel. +49 30 1234567, Termin am 12.03.2024 mit Frau Müller.\n'

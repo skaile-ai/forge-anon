@@ -28,6 +28,34 @@ export function protectedSpans(text: string): Range[] {
   return merge(spans)
 }
 
+/**
+ * UUID v4 (e.g. editor block ids, `8-4-4-4-12` hex, version nibble 4, variant 8-b, either case) as a whole token.
+ * Pass it as `protect` so ids reach the model verbatim instead of being shredded by the IPv6/ID detectors.
+ */
+export const BLOCK_ID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i
+
+/**
+ * Sorted, merged `[start, end)` ranges of every match of the caller-defined `patterns`. Each pattern is cloned with
+ * the `g` flag added when missing (other flags kept), so non-global patterns and shared `lastIndex` state are safe.
+ * Empty matches are ignored.
+ */
+export function patternSpans(text: string, patterns: readonly RegExp[]): Range[] {
+  const spans: Range[] = []
+  for (const pattern of patterns) {
+    const re = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`)
+    for (let m = re.exec(text); m; m = re.exec(text)) {
+      if (m[0].length === 0) re.lastIndex++
+      else spans.push([m.index, m.index + m[0].length])
+    }
+  }
+  return merge(spans)
+}
+
+/** Union of range lists: sorted, overlapping or touching ranges merged. Inputs are not modified. */
+export function mergeSpans(...lists: readonly (readonly Range[])[]): Range[] {
+  return merge(lists.flatMap(list => list.map((r): Range => [r[0], r[1]])))
+}
+
 function merge(spans: Range[]): Range[] {
   if (spans.length === 0) return []
   spans.sort((a, b) => a[0] - b[0] || a[1] - b[1])

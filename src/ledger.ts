@@ -31,10 +31,10 @@ export type Ledger = {
 const DETECTOR_NAMES: readonly DetectorName[] = ['rules', 'regex', 'onnx', 'llm', 'manual']
 
 export function defaultStoreDir(): string {
-  return join(homedir(), '.clinico-anon', 'ledgers')
+  return join(homedir(), '.local', 'share', 'forge-anon', 'ledgers')
 }
 
-/** `$ANON_LEDGER_DIR` (`~` expanded) or `~/.clinico-anon/ledgers`. */
+/** `$ANON_LEDGER_DIR` (`~` expanded) or `~/.local/share/forge-anon/ledgers`. */
 export function storeDir(env: NodeJS.ProcessEnv = process.env): string {
   const override = env.ANON_LEDGER_DIR?.trim()
   return override ? expandHome(override) : defaultStoreDir()
@@ -68,7 +68,7 @@ export type SaveLedgerInput = {
 export function saveLedger(input: SaveLedgerInput): { key: string; path: string } {
   const dir = input.dir ? expandHome(input.dir) : storeDir()
   mkdirSync(dir, { recursive: true, mode: 0o700 })
-  // The default store lives in `~/.clinico-anon`; only there is the parent ours to lock down.
+  // The default store lives in `~/.local/share/forge-anon`; only there is the parent ours to lock down.
   if (dir === defaultStoreDir()) chmodSync(dirname(dir), 0o700)
   chmodSync(dir, 0o700)
 

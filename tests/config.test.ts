@@ -13,7 +13,7 @@ function write(file: string, content: string): string {
   fs.writeFileSync(file, content)
   return file
 }
-const homeCfg = () => path.join(home, '.config', 'anon', 'config.yaml')
+const homeCfg = () => path.join(home, '.config', 'forge-anon', 'config.yaml')
 const cwdCfg = () => path.join(cwd, 'anon.config.yaml')
 const load = (extra: { path?: string; env?: NodeJS.ProcessEnv } = {}) =>
   loadConfig({ home, cwd, env: {}, ...extra })
@@ -34,9 +34,9 @@ describe('loadConfig', () => {
     expect(config.placeholders.style).toBe('presidio')
     expect(config.detectors.onnx.chunkChars).toBe(900)
     expect(config.detectors.llm.enabled).toBe(false)
-    expect(config.detectors.onnx.cacheDir).toBe(path.join(home, '.cache/ecsplico-anon/models'))
-    expect(config.ledger.dir).toBe(path.join(home, '.clinico-anon/ledgers'))
-    expect(DEFAULT_CONFIG.ledger.dir).toBe('~/.clinico-anon/ledgers')
+    expect(config.detectors.onnx.cacheDir).toBe(path.join(home, '.cache/forge-anon/models'))
+    expect(config.ledger.dir).toBe(path.join(home, '.local/share/forge-anon/ledgers'))
+    expect(DEFAULT_CONFIG.ledger.dir).toBe('~/.local/share/forge-anon/ledgers')
   })
 
   test('precedence: home < cwd < explicit path', () => {

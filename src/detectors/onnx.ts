@@ -30,7 +30,7 @@ export const ONNX_DEFAULTS: Required<Omit<OnnxOptions, 'pipeline'>> = {
   // numbers and abbreviations tokenise denser, so 900 chars keeps a safe margin.
   chunkChars: 900,
   localFilesOnly: false,
-  cacheDir: '~/.cache/ecsplico-anon/models',
+  cacheDir: '~/.cache/forge-anon/models',
   entities: [
     'NAME_EXT', 'DATE_BIRTH', 'DATE', 'AGE', 'CONTACT_EMAIL', 'CONTACT_PHONE', 'CONTACT_URL', 'CONTACT_IP',
     'LOCATION_CITY', 'LOCATION_STATE', 'LOCATION_STREET', 'LOCATION_ZIP', 'LOCATION_OTHER',

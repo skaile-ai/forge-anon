@@ -7,7 +7,7 @@ import { onnxDetector } from './detectors/onnx.ts'
 import { regexDetector } from './detectors/regex.ts'
 import type { Detector } from './detectors/types.ts'
 import { FakeNames } from './fake-names.ts'
-import { overlaps, protectedSpans } from './markdown.ts'
+import { mergeSpans, overlaps, patternSpans, protectedSpans } from './markdown.ts'
 import type { Range } from './markdown.ts'
 import { getStyle } from './placeholders.ts'
 import { restore } from './restore.ts'
@@ -22,6 +22,12 @@ export type AnonymizeOptions = {
   config: AnonConfig
   stammdaten?: Stammdaten
   markdown?: boolean
+  /**
+   * Caller-defined protected patterns: every match is left verbatim by every detector (regex, onnx, llm, rules,
+   * manual, mapping), with or without `markdown`. A detection that overlaps a match is dropped. Patterns need no
+   * `g` flag (it is added on a copy); empty matches are ignored. Use it for structural tokens such as ids.
+   */
+  protect?: readonly RegExp[]
   /** Required for the `llm` detector (it only runs when `config.detectors.llm.enabled` and `chat` is given). */
   chat?: NerChat
   manual?: { text: string; kind: EntityKind; placeholder?: string }[]
@@ -199,8 +205,9 @@ async function run(text: string, opts: AnonymizeOptions, style: PlaceholderStyle
     }
   }
 
-  // Markdown protection first: a span inside code must not suppress a prose span.
-  const protect: Range[] = (opts.markdown ?? false) && config.markdown.protect ? protectedSpans(text) : []
+  // Protection first: a span inside code or a protected pattern must not suppress a prose span.
+  const markdownSpans: Range[] = (opts.markdown ?? false) && config.markdown.protect ? protectedSpans(text) : []
+  const protect = mergeSpans(markdownSpans, patternSpans(text, opts.protect ?? []))
   const candidates = protect.length > 0 ? all.filter(s => !overlaps(s.start, s.end, protect)) : all
 
   // Review kinds are reported, not replaced. Explicit decisions (manual, rules) are never set aside.

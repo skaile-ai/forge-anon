@@ -1,10 +1,10 @@
-# Publishes @ecsplico/anon at the version in package.json to npmjs when a
+# Publishes @skaile/forge-anon at the version in package.json to npmjs when a
 # `v*` tag is pushed:  git tag v0.1.0 && git push origin v0.1.0
 #
 # Trusted publishing: npmjs trusts this workflow file (publish.yml in
-# ecsplico/anon) and the job logs in with GitHub's OIDC token, so no npm
+# skaile-ai/forge-anon) and the job logs in with GitHub's OIDC token, so no npm
 # secret exists. Renaming this file breaks the trust; set it up again with
-#   npm trust github @ecsplico/anon --file <name>.yml --repository ecsplico/anon --allow-publish
+#   npm trust github @skaile/forge-anon --file <name>.yml --repository skaile-ai/forge-anon --allow-publish
 name: publish
 
 on:
@@ -42,8 +42,8 @@ jobs:
       - name: Publish to npmjs (skipped when the version is already there)
         run: |
           version="$(node -p "require('./package.json').version")"
-          if npm view "@ecsplico/anon@$version" version >/dev/null 2>&1; then
-            echo "@ecsplico/anon@$version is already published"
+          if npm view "@skaile/forge-anon@$version" version >/dev/null 2>&1; then
+            echo "@skaile/forge-anon@$version is already published"
             exit 0
           fi
           npm publish --access public
