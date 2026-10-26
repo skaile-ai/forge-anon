@@ -250,6 +250,45 @@ describe('anonLanguageModelMiddleware', () => {
     expect((raw.find(p => p.type === 'tool-call') as { input: string }).input).toBe(`{broken ${original}`)
   })
 
+  test('reasoning is restored in streams (also when a placeholder straddles deltas) and in generate results', async () => {
+    const session = newSession()
+    await session.anonymize(DOCUMENT)
+    const date = session.entities.find(e => e.original === '12.03.1970')!
+    const mw = anonLanguageModelMiddleware(session, { system: SYSTEM })
+    const cut = Math.floor(date.placeholder.length / 2)
+    const parts = await streamed(
+      mw,
+      partsStream([
+        { type: 'reasoning-start', id: 'r1' },
+        { type: 'reasoning-delta', id: 'r1', delta: `Termin ${date.placeholder.slice(0, cut)}` },
+        { type: 'reasoning-delta', id: 'r1', delta: `${date.placeholder.slice(cut)} prüfen, dann <` },
+        { type: 'reasoning-end', id: 'r1' }
+      ])
+    )
+    const reasoning = parts.filter(p => p.type === 'reasoning-delta').map(p => (p as { delta: string }).delta).join('')
+    expect(reasoning).toBe('Termin 12.03.1970 prüfen, dann <')
+    expect(parts.findIndex(p => p.type === 'reasoning-end')).toBe(parts.length - 2) // tail flushed before the end part
+
+    const result = await mw.wrapGenerate!({
+      doGenerate: async () =>
+        ({
+          content: [{ type: 'reasoning', text: `Am ${date.placeholder}` }],
+          finishReason: { unified: 'stop', raw: undefined },
+          usage: {},
+          warnings: []
+        }) as never,
+      doStream: async () => ({}) as never,
+      params: {} as never,
+      model: {} as never
+    })
+    expect(result.content[0]).toMatchObject({ type: 'reasoning', text: 'Am 12.03.1970' })
+
+    // The restored reasoning re-enters the next prompt without a placeholder collision and maps back to the same placeholder.
+    const out = await transform(mw, [{ role: 'assistant', content: [{ type: 'reasoning', text: 'Am 12.03.1970' }] }])
+    expect(promptText(out.prompt)).toContain(date.placeholder)
+    expect(promptText(out.prompt)).not.toContain('12.03.1970')
+  })
+
   test('wrapGenerate restores text and tool-call input', async () => {
     const session = newSession()
     await session.anonymize(DOCUMENT)

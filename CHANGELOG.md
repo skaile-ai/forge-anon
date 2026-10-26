@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- `anonLanguageModelMiddleware`: reasoning is restored like text, in streams (`reasoning-delta`, own restorer per block, tail flushed on `reasoning-end`) and in `wrapGenerate`. Before, reasoning reached the AI SDK with placeholders; a server-tool host then re-sent it in the next step and `anonymize` threw a placeholder collision.
+- `BLOCK_ID_PATTERN` matches standalone ids only. A UUID inside an email (`<uuid>.max@web.de`, `max-<uuid>@web.de`) or URL (`/p/<uuid>/a`, `?id=<uuid>`) no longer matches, so protecting block ids no longer drops the whole email/URL detection and sends the contact in clear text.
+- `createAnonSessionStore`: detectors are built once per store and shared by its sessions (one ONNX model per store instead of one per session id).
+
 ## 0.3.0
 
 - **Renamed** `@ecsplico/anon` → `@skaile/forge-anon` (repo `skaile-ai/forge-anon`). The `anon` command keeps its name.

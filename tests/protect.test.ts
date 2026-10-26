@@ -57,6 +57,49 @@ describe('BLOCK_ID_PATTERN', () => {
   })
 })
 
+describe('BLOCK_ID_PATTERN boundaries', () => {
+  const found = (text: string) => patternSpans(text, [BLOCK_ID_PATTERN]).map(([s, e]) => text.slice(s, e))
+
+  test.each([
+    [`[${UUID}] Text`],
+    [UUID],
+    [`Block ${UUID}.`],
+    [`(${UUID})`],
+    [`{"id":"${UUID}"}`],
+    [`Block ${UUID}, dann ${UUID}`]
+  ])('standalone id matches: %s', text => {
+    expect(found(text).length).toBeGreaterThan(0)
+    expect(found(text)[0]).toBe(UUID)
+  })
+
+  test.each([
+    [`${UUID}.max@web.de`],
+    [`max.${UUID}@web.de`],
+    [`max-${UUID}@web.de`],
+    [`max@${UUID}.de`],
+    [`https://h.example.de/p/${UUID}/a`],
+    [`https://h.example.de/p?id=${UUID}`]
+  ])('id inside an email or URL does not match: %s', text => {
+    expect(found(text)).toEqual([])
+  })
+
+  test('email and URL containing an id are still anonymized with protect (the id does not shield them)', async () => {
+    const mail = `${UUID}.max@web.de`
+    const url = `https://kis.example.de/patient/${UUID}/akte`
+    const text = `[${UUID}] Mail: ${mail}, Akte: ${url}.`
+    const res = await anonymize(text, {
+      config: config(),
+      detectors: [regexDetector({ entities: ['CONTACT_EMAIL', 'CONTACT_URL'] })],
+      protect: [BLOCK_ID_PATTERN]
+    })
+    expect(res.text.startsWith(`[${UUID}] `)).toBe(true) // the standalone block id stays
+    expect(res.text).not.toContain('web.de')
+    expect(res.text).not.toContain('kis.example.de')
+    expect(res.entities.map(e => e.original).sort()).toEqual([mail, url].sort())
+    expect(restore(res.text, res.entities)).toBe(text)
+  })
+})
+
 describe('patternSpans / mergeSpans', () => {
   test('non-global patterns work, state is not shared between calls, empty matches are ignored', () => {
     const shared = /ab/g

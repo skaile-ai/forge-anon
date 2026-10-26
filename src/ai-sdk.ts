@@ -10,6 +10,7 @@ import type {
 } from '@ai-sdk/provider'
 import type { LanguageModelMiddleware } from 'ai'
 import type { AnonConfig } from './config.ts'
+import { buildDetectors } from './pipeline.ts'
 import { createAnonSession } from './session.ts'
 import type { AnonSession } from './session.ts'
 
@@ -41,6 +42,9 @@ export const DEFAULT_IDLE_TTL_MS = 60 * 60 * 1000
 export function createAnonSessionStore(options: AnonSessionStoreOptions): AnonSessionStore {
   const ttl = options.idleTtlMs ?? DEFAULT_IDLE_TTL_MS
   const sessions = new Map<string, { session: AnonSession; touched: number }>()
+  // Detectors hold no per-session state (the mapping lives in the session), so every session shares one set: the ONNX model loads once per store.
+  const markdown = options.markdown ?? true
+  const detectors = buildDetectors({ config: options.config, markdown, protect: options.protect })
 
   function evictIdle(now: number): void {
     for (const [id, slot] of sessions) if (now - slot.touched > ttl) sessions.delete(id)
@@ -52,7 +56,7 @@ export function createAnonSessionStore(options: AnonSessionStoreOptions): AnonSe
       let slot = sessions.get(id)
       if (!slot) {
         slot = {
-          session: createAnonSession({ config: options.config, markdown: options.markdown ?? true, protect: options.protect }),
+          session: createAnonSession({ config: options.config, markdown, protect: options.protect, detectors }),
           touched: now
         }
         sessions.set(id, slot)
@@ -174,7 +178,7 @@ function restoreToolInput(session: AnonSession, input: string): string {
 }
 
 function restoreContent(session: AnonSession, part: LanguageModelV4Content): LanguageModelV4Content {
-  if (part.type === 'text') return { ...part, text: session.restore(part.text) }
+  if (part.type === 'text' || part.type === 'reasoning') return { ...part, text: session.restore(part.text) }
   if (part.type === 'tool-call') return { ...part, input: restoreToolInput(session, part.input) }
   return part
 }
@@ -220,12 +224,29 @@ export function anonLanguageModelMiddleware(session: AnonSession, options: AnonM
     async wrapStream({ doStream }) {
       const { stream, ...rest } = await doStream()
       const restorer = session.streamRestorer()
+      // Reasoning is restored too (it can re-enter the next step's prompt, where a leftover placeholder would collide); one restorer per reasoning block.
+      const reasoning = new Map<string, ReturnType<typeof session.streamRestorer>>()
+      const reasoningRestorer = (id: string) => {
+        let r = reasoning.get(id)
+        if (!r) reasoning.set(id, (r = session.streamRestorer()))
+        return r
+      }
       const transform = new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
         transform(part, controller) {
           if (part.type === 'text-delta') {
             const delta = restorer.push(part.delta)
             if (delta) controller.enqueue({ ...part, delta })
             return
+          }
+          if (part.type === 'reasoning-delta') {
+            const delta = reasoningRestorer(part.id).push(part.delta)
+            if (delta) controller.enqueue({ ...part, delta })
+            return
+          }
+          if (part.type === 'reasoning-end') {
+            const tail = reasoningRestorer(part.id).flush()
+            reasoning.delete(part.id)
+            if (tail) controller.enqueue({ type: 'reasoning-delta', id: part.id, delta: tail })
           }
           if (part.type === 'text-end') {
             const tail = restorer.flush()

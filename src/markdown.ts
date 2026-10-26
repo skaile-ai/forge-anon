@@ -29,10 +29,12 @@ export function protectedSpans(text: string): Range[] {
 }
 
 /**
- * UUID v4 (e.g. editor block ids, `8-4-4-4-12` hex, version nibble 4, variant 8-b, either case) as a whole token.
+ * UUID v4 (e.g. editor block ids, `8-4-4-4-12` hex, version nibble 4, variant 8-b, either case) as a standalone token:
+ * not when glued to a longer token (email local part or domain, URL path/query, `x-<uuid>`), so protecting block ids
+ * never shields part of an email or URL from its own detector.
  * Pass it as `protect` so ids reach the model verbatim instead of being shredded by the IPv6/ID detectors.
  */
-export const BLOCK_ID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i
+export const BLOCK_ID_PATTERN = /(?<![\w.@/%+:=?&#-])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\w@/%+-]|\.\w)/i
 
 /**
  * Sorted, merged `[start, end)` ranges of every match of the caller-defined `patterns`. Each pattern is cloned with
