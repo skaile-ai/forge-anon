@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2
+
+- Released through npm trusted publishing (GitHub OIDC from `publish.yml`); no npm token is stored. No package changes.
+
 ## 0.3.1
 
 - `anonLanguageModelMiddleware`: reasoning is restored like text, in streams (`reasoning-delta`, own restorer per block, tail flushed on `reasoning-end`) and in `wrapGenerate`. Before, reasoning reached the AI SDK with placeholders; a server-tool host then re-sent it in the next step and `anonymize` threw a placeholder collision.
