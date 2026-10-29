@@ -27,6 +27,13 @@ export type AnonSession = {
   streamRestorer(): StreamRestorer
 }
 
+/**
+ * German system instruction for a model that sees anonymized text: placeholders stand for real values, copy them
+ * verbatim. The default of the AI SDK decorator and of the workspaces model endpoint's anonymizing transform.
+ */
+export const ANON_SYSTEM =
+  'Platzhalter wie NAME_PATIENT_xxxx oder DATE_BIRTH_xxxx stehen für echte Werte. Übernimm sie wörtlich und unverändert; rate nicht, was dahintersteht.'
+
 const CACHE_LIMIT = 512
 
 export function createAnonSession(opts: AnonSessionOptions): AnonSession {

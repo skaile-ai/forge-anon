@@ -226,6 +226,7 @@ restore(result.text, result.entities) === text
 |`patternSpans(text, patterns)`, `mergeSpans(...lists)`, `protectedSpans(text)`, `overlaps(start, end, spans)`|protected-range helpers behind `protect` and `markdown`: sorted, merged `[start, end)` ranges|
 |`BLOCK_ID_PATTERN`|UUID v4 (editor block ids) as a `protect` pattern|
 |`createAnonSession(opts)`, `createStreamRestorer(entities, opts?)`|conversation mapping and streamed restore, see below|
+|`ANON_SYSTEM`|German system instruction: placeholders stand for real values, copy them verbatim; the default of the AI SDK decorator and of the workspaces model endpoint|
 
 ## Library: sessions and streaming
 

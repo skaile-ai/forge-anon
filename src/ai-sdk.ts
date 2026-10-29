@@ -13,7 +13,7 @@ import { wrapLanguageModel } from 'ai'
 import type { LanguageModel, LanguageModelMiddleware } from 'ai'
 import type { AnonConfig } from './config.ts'
 import { buildDetectors } from './pipeline.ts'
-import { createAnonSession } from './session.ts'
+import { ANON_SYSTEM, createAnonSession } from './session.ts'
 import type { AnonSession } from './session.ts'
 
 // ---------------------------------------------------------------------------
@@ -314,9 +314,7 @@ export function anonLanguageModelMiddleware(session: AnonSession, options: AnonM
 // ---------------------------------------------------------------------------
 // model-provider decorator
 
-/** The default app system message of a wrapped call (German; the middleware sends it as the first system message). */
-export const ANON_SYSTEM =
-  'Platzhalter wie NAME_PATIENT_xxxx oder DATE_BIRTH_xxxx stehen für echte Werte. Übernimm sie wörtlich und unverändert; rate nicht, was dahintersteht.'
+export { ANON_SYSTEM }
 
 /** Anything with a `languageModel(ref, user)` such as forge-editor's `ModelProvider`. */
 type ProviderOf<Ref> = { languageModel?(ref: Ref, user: object | null): Promise<LanguageModel | null> }
