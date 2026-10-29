@@ -283,7 +283,19 @@ import { createAnonSession } from '@skaile/forge-anon'
 import { ANON_SYSTEM, anonymizingModelProvider } from '@skaile/forge-anon/ai-sdk'
 import { createEditorModelProvider } from '@skaile/forge-settings/runtime/editor'
 
-const inner = createEditorModelProvider({ registry, env, onFailure })
+// The inner provider must THROW for refs it cannot place (`{ endpoint }` refs, unknown presets), never return `null`:
+// `null` passes through the decorator and the host (forge-editor's `resolveModel`) then builds its own, UNWRAPPED model
+// for that ref, which may be a remote one.
+const registryProvider = createEditorModelProvider({ registry, env, onFailure })
+const inner: typeof registryProvider = {
+  ...registryProvider,
+  async languageModel(ref, user) {
+    if (!('preset' in ref)) throw new Error('Nur Presets der Registry erlaubt')
+    const model = await registryProvider.languageModel!(ref, user)
+    if (model === null) throw new Error(`Unbekanntes Preset: ${ref.preset}`)
+    return model
+  }
+}
 
 export const editorModels = anonymizingModelProvider(inner, {
   // `true` → anonymize; `false` → untouched local model. Unknown ref → `true` (fail closed).
@@ -293,12 +305,14 @@ export const editorModels = anonymizingModelProvider(inner, {
   system: ANON_SYSTEM // optional, this is the default
 })
 
-// editorModels.languageModel({ preset: 'remote-70b' }, user) → wrapped; ({ endpoint: 'http://localhost:1234/v1', … }, user) → as is
+// editorModels.languageModel({ preset: 'remote-70b' }, user) → wrapped; a local preset → as is; ({ endpoint, … }, user) or an unknown preset → throws
 ```
 
 - `anonymizingModelProvider(inner, { sessionFor, isRemote, system? })` returns a copy of `inner` (own properties and prototype methods kept) whose `languageModel` is replaced. An `inner` without `languageModel` stays without one.
 - `null` from `inner.languageModel` stays `null`; `isRemote` and `sessionFor` are not called then. `isRemote(ref)` is `false` → the model is returned as is. Otherwise `sessionFor(user, ref)` runs once and the model is wrapped with `anonLanguageModelMiddleware(session, { system })`; the session is shared by every request on that model object, so key it by what must share placeholders (user, case).
 - A remote ref that resolves to a plain model id string cannot be wrapped and throws instead of sending text in clear.
+- `null` falls through to the host's own, unwrapped resolution. If the host builds a model for a ref the inner provider answered `null` for (forge-editor builds one for `{ endpoint }` refs), that model is not anonymized. Make `inner.languageModel` throw instead of returning `null` for every ref that must not run un-anonymized.
+- Remote models refuse any prompt with file parts (images, PDF pages, inline files, non-text tool results) with `Bilder und Dateien gehen nicht an ein Remote-Modell (nicht anonymisierbar); lokales Modell verwenden.` The error is thrown before the inner model is called. Local models get such prompts untouched. `anonLanguageModelMiddleware` used on its own still passes file parts through unchanged (it anonymizes text only).
 - `ANON_SYSTEM` (German): „Platzhalter wie NAME_PATIENT_xxxx oder DATE_BIRTH_xxxx stehen für echte Werte. Übernimm sie wörtlich und unverändert; rate nicht, was dahintersteht.“ The decorator has no `document` option: compose and chat carry the document inside the prompt, which the middleware anonymizes anyway.
 - Everything that must stay local (embeddings, transcription) is not a language model and bypasses the decorator; keep it local yourself.
 

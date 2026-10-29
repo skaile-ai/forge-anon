@@ -267,6 +267,47 @@ export function anonLanguageModelMiddleware(session: AnonSession, options: AnonM
 }
 
 // ---------------------------------------------------------------------------
+// file refusal
+
+/** Message of the refusal; German like the rest of the app-facing strings. */
+export const REMOTE_FILES_REFUSED = 'Bilder und Dateien gehen nicht an ein Remote-Modell (nicht anonymisierbar); lokales Modell verwenden.'
+
+function toolResultCarriesFile(part: { type: string; output?: LanguageModelV4ToolResultOutput }): boolean {
+  return part.type === 'tool-result' && part.output?.type === 'content' && part.output.value.some(item => item.type !== 'text')
+}
+
+/** Whether the prompt carries content the middleware cannot anonymize: file parts (images, PDF pages, inline files), custom parts, or non-text tool-result content. */
+function promptCarriesFile(prompt: LanguageModelV4Prompt): boolean {
+  for (const message of prompt) {
+    switch (message.role) {
+      case 'system':
+        break
+      case 'user':
+        if (message.content.some(part => part.type !== 'text')) return true
+        break
+      case 'assistant':
+        if (message.content.some(part => part.type === 'file' || part.type === 'reasoning-file' || part.type === 'custom' || toolResultCarriesFile(part))) return true
+        break
+      case 'tool':
+        if (message.content.some(toolResultCarriesFile)) return true
+        break
+    }
+  }
+  return false
+}
+
+/**
+ * Refuses (throws before the model is called) a prompt with file parts. `anonLanguageModelMiddleware` passes such
+ * parts through unchanged because their bytes cannot be anonymized; a remote model must never get them.
+ */
+const refuseFilesMiddleware: LanguageModelMiddleware = {
+  transformParams({ params }) {
+    if (promptCarriesFile(params.prompt)) throw new Error(REMOTE_FILES_REFUSED)
+    return Promise.resolve(params)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // model-provider decorator
 
 /** The default app system message of a wrapped call (German; the middleware sends it as the first system message). */
@@ -295,7 +336,9 @@ export type AnonProviderOptions<Ref> = {
  *
  * `null` from the inner provider stays `null`, and `isRemote`/`sessionFor` are then not called. A remote ref
  * that resolves to a model id string (resolved by the AI SDK's global provider, which cannot be wrapped) throws:
- * the text is never sent un-anonymized.
+ * the text is never sent un-anonymized. A prompt with file parts (images, PDF pages, inline files, non-text tool
+ * results) is refused with `REMOTE_FILES_REFUSED` before the inner model is called: their bytes cannot be
+ * anonymized. `anonLanguageModelMiddleware` itself still passes such parts through unchanged.
  */
 export function anonymizingModelProvider<P extends ProviderOf<never>>(inner: P, options: AnonProviderOptions<RefOf<P>>): P
 export function anonymizingModelProvider(inner: ProviderOf<unknown>, options: AnonProviderOptions<unknown>): ProviderOf<unknown> {
@@ -308,7 +351,7 @@ export function anonymizingModelProvider(inner: ProviderOf<unknown>, options: An
     if (!(await options.isRemote(ref))) return model
     if (typeof model === 'string') throw new Error('Remote-Modell als Modell-ID: kann nicht anonymisiert werden')
     const session = await options.sessionFor(user, ref)
-    return wrapLanguageModel({ model, middleware: anonLanguageModelMiddleware(session, { system }) })
+    return wrapLanguageModel({ model, middleware: [refuseFilesMiddleware, anonLanguageModelMiddleware(session, { system })] })
   }
   return Object.assign(copy, { languageModel })
 }

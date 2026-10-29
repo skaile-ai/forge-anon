@@ -180,4 +180,59 @@ describe('anonymizingModelProvider', () => {
     )
     await expect(provider.languageModel!({ endpoint: 'https://api.example.org/v1' }, null)).rejects.toThrow('Remote-Modell als Modell-ID')
   })
+
+  const FILE_PROMPT = [
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Was zeigt die Seite?' },
+        { type: 'file', mediaType: 'image/png', data: { type: 'data', data: new Uint8Array([1, 2, 3]) } }
+      ]
+    }
+  ]
+  const TOOL_FILE_PROMPT = [
+    {
+      role: 'tool',
+      content: [
+        {
+          type: 'tool-result',
+          toolCallId: 'c1',
+          toolName: 'scan',
+          output: { type: 'content', value: [{ type: 'file', mediaType: 'application/pdf', data: { type: 'data', data: 'AAAA' } }] }
+        }
+      ]
+    }
+  ]
+
+  test('a remote ref refuses a prompt with a file part before the inner model runs (generate and stream)', async () => {
+    const session = newSession()
+    const model = echoModel(session)
+    const provider = anonymizingModelProvider(
+      { languageModel: async (_ref: Ref, _user: object | null): Promise<LanguageModel | null> => model },
+      { isRemote: () => true, sessionFor: () => session }
+    )
+    const resolved = (await provider.languageModel!({ endpoint: 'https://api.example.org/v1' }, null)) as LanguageModelV4
+    for (const prompt of [FILE_PROMPT, TOOL_FILE_PROMPT]) {
+      await expect(call(resolved, prompt)).rejects.toThrow('Bilder und Dateien gehen nicht an ein Remote-Modell')
+      await expect(resolved.doStream({ prompt } as unknown as LanguageModelV4CallOptions)).rejects.toThrow('Remote-Modell')
+    }
+    expect(model.doGenerateCalls).toHaveLength(0)
+    expect(model.doStreamCalls).toHaveLength(0)
+    // text-only prompts still go through
+    await call(resolved)
+    expect(model.doGenerateCalls).toHaveLength(1)
+  })
+
+  test('a local ref passes a file part through untouched', async () => {
+    const session = newSession()
+    const model = echoModel(session)
+    const provider = anonymizingModelProvider(
+      { languageModel: async (_ref: Ref, _user: object | null): Promise<LanguageModel | null> => model },
+      { isRemote: () => false, sessionFor: () => session }
+    )
+    const resolved = await provider.languageModel!({ endpoint: 'http://localhost:11434/v1' }, null)
+    expect(resolved).toBe(model)
+    await call(resolved as LanguageModelV4, FILE_PROMPT)
+    expect(model.doGenerateCalls).toHaveLength(1)
+  })
 })

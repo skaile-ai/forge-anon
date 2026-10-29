@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1
+
+### Fixed
+
+- `anonymizingModelProvider`: a wrapped (remote) model now refuses a prompt that carries file parts (`file`, `reasoning-file`, `custom`, non-text tool-result content) with `Bilder und Dateien gehen nicht an ein Remote-Modell (nicht anonymisierbar); lokales Modell verwenden.`, before the inner model is called. Before, the middleware passed such parts through unchanged, so images and PDF pages reached a remote model in clear. Local refs are unaffected. `anonLanguageModelMiddleware` itself is unchanged.
+- README: the ModelProvider-decorator example no longer lets `{ endpoint }` refs fall through as `null` (the host then builds an unwrapped, possibly remote model); the inner provider throws for them. The `null` fall-through is documented.
+
 ## 0.4.0
 
 - `@skaile/forge-anon/ai-sdk`: `anonymizingModelProvider(inner, { sessionFor, isRemote, system? })` decorates a model provider (anything with `languageModel(ref, user)`, e.g. forge-editor's `ModelProvider`). A remote ref (`isRemote`) gets its model wrapped with `anonLanguageModelMiddleware(await sessionFor(user, ref), { system })`; a local ref returns the identical model object; `null` stays `null` without calling `isRemote`/`sessionFor`; a remote ref that resolves to a plain model id string throws (it cannot be wrapped). Other properties of `inner` are kept.
