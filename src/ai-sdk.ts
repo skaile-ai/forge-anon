@@ -1,5 +1,6 @@
-// AI SDK binding: a session store keyed by chat/session id and a language-model middleware that sends the model
-// placeholders only and restores the originals in its answer. Needs `ai` ^7 and `@ai-sdk/provider` (types only).
+// AI SDK binding: a session store keyed by chat/session id, a language-model middleware that sends the model
+// placeholders only and restores the originals in its answer, and a model-provider decorator that applies it to
+// remote models only. Needs `ai` ^7 and `@ai-sdk/provider` (the latter for types only).
 
 import type {
   LanguageModelV4Content,
@@ -8,7 +9,8 @@ import type {
   LanguageModelV4StreamPart,
   LanguageModelV4ToolResultOutput
 } from '@ai-sdk/provider'
-import type { LanguageModelMiddleware } from 'ai'
+import { wrapLanguageModel } from 'ai'
+import type { LanguageModel, LanguageModelMiddleware } from 'ai'
 import type { AnonConfig } from './config.ts'
 import { buildDetectors } from './pipeline.ts'
 import { createAnonSession } from './session.ts'
@@ -262,4 +264,51 @@ export function anonLanguageModelMiddleware(session: AnonSession, options: AnonM
       return { stream: stream.pipeThrough(transform), ...rest }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// model-provider decorator
+
+/** The default app system message of a wrapped call (German; the middleware sends it as the first system message). */
+export const ANON_SYSTEM =
+  'Platzhalter wie NAME_PATIENT_xxxx oder DATE_BIRTH_xxxx stehen für echte Werte. Übernimm sie wörtlich und unverändert; rate nicht, was dahintersteht.'
+
+/** Anything with a `languageModel(ref, user)` such as forge-editor's `ModelProvider`. */
+type ProviderOf<Ref> = { languageModel?(ref: Ref, user: object | null): Promise<LanguageModel | null> }
+/** The ref type of a provider's `languageModel`, so call sites need no explicit type arguments. */
+type RefOf<P> = P extends { languageModel?(ref: infer R, user: object | null): unknown } ? R : never
+
+export type AnonProviderOptions<Ref> = {
+  /** The session of this call; the app keys it (per user, per case, …). Called once per `languageModel()` call that resolves to a remote model. */
+  sessionFor(user: object | null, ref: Ref): AnonSession | Promise<AnonSession>
+  /** `true`: wrap the model; `false`: return the inner model untouched (local model). Fail closed: answer `true` for a ref you cannot classify. */
+  isRemote(ref: Ref): boolean | Promise<boolean>
+  /** First system message of every wrapped call. Default `ANON_SYSTEM`. */
+  system?: string
+}
+
+/**
+ * Wraps a model provider (anything with a `languageModel(ref, user)` such as forge-editor's `ModelProvider`) so that
+ * every remote model it hands out anonymizes the prompt and restores the answer, while local models pass through
+ * as the identical object. The result carries every property of `inner` (own properties and the prototype's
+ * methods), with `languageModel` replaced; an `inner` without `languageModel` is returned as a copy without one.
+ *
+ * `null` from the inner provider stays `null`, and `isRemote`/`sessionFor` are then not called. A remote ref
+ * that resolves to a model id string (resolved by the AI SDK's global provider, which cannot be wrapped) throws:
+ * the text is never sent un-anonymized.
+ */
+export function anonymizingModelProvider<P extends ProviderOf<never>>(inner: P, options: AnonProviderOptions<RefOf<P>>): P
+export function anonymizingModelProvider(inner: ProviderOf<unknown>, options: AnonProviderOptions<unknown>): ProviderOf<unknown> {
+  const copy: ProviderOf<unknown> = Object.assign(Object.create(Object.getPrototypeOf(inner)), inner)
+  if (typeof inner.languageModel !== 'function') return copy
+  const system = options.system ?? ANON_SYSTEM
+  const languageModel = async (ref: unknown, user: object | null): Promise<LanguageModel | null> => {
+    const model = await inner.languageModel!(ref, user)
+    if (model === null) return null
+    if (!(await options.isRemote(ref))) return model
+    if (typeof model === 'string') throw new Error('Remote-Modell als Modell-ID: kann nicht anonymisiert werden')
+    const session = await options.sessionFor(user, ref)
+    return wrapLanguageModel({ model, middleware: anonLanguageModelMiddleware(session, { system }) })
+  }
+  return Object.assign(copy, { languageModel })
 }

@@ -274,6 +274,34 @@ const model = wrapLanguageModel({
 - Anonymized: every string leaf of user/assistant text, of assistant `tool-call` inputs (recursively) and of tool results. Restored: streamed text incrementally (a placeholder may straddle deltas; `text-end` flushes), `tool-call` inputs as parsed JSON (originals with `"` or `\` stay valid; unparsable input is restored as plain text). `tool-input-delta` parts pass through untouched, so act on the finished `tool-call`. If anonymizing fails, the model is never called.
 - `anonymizeJson(session, value)` / `restoreJson(session, value)`: the same leaf-wise mapping for your own JSON (object keys are never touched).
 
+### Als ModelProvider-Dekorator
+
+Hosts that resolve models through a provider object (forge-editor's `ModelProvider`: `languageModel(ref, user)`) wrap it once instead of wrapping every model: remote models get the middleware above, local ones come back as the identical object.
+
+```ts
+import { createAnonSession } from '@skaile/forge-anon'
+import { ANON_SYSTEM, anonymizingModelProvider } from '@skaile/forge-anon/ai-sdk'
+import { createEditorModelProvider } from '@skaile/forge-settings/runtime/editor'
+
+const inner = createEditorModelProvider({ registry, env, onFailure })
+
+export const editorModels = anonymizingModelProvider(inner, {
+  // `true` → anonymize; `false` → untouched local model. Unknown ref → `true` (fail closed).
+  isRemote: async ref => !istLokal(await baseUrlOf(ref)), // hostname localhost, 127.0.0.0/8, ::1, 10/8, 172.16/12, 192.168/16, *.local
+  // one session per user, built from the Stammdaten of the user's cases; called once per languageModel() call
+  sessionFor: user => sessionOf(user), // Map<userId, createAnonSession({ config, markdown: true, stammdaten })>
+  system: ANON_SYSTEM // optional, this is the default
+})
+
+// editorModels.languageModel({ preset: 'remote-70b' }, user) → wrapped; ({ endpoint: 'http://localhost:1234/v1', … }, user) → as is
+```
+
+- `anonymizingModelProvider(inner, { sessionFor, isRemote, system? })` returns a copy of `inner` (own properties and prototype methods kept) whose `languageModel` is replaced. An `inner` without `languageModel` stays without one.
+- `null` from `inner.languageModel` stays `null`; `isRemote` and `sessionFor` are not called then. `isRemote(ref)` is `false` → the model is returned as is. Otherwise `sessionFor(user, ref)` runs once and the model is wrapped with `anonLanguageModelMiddleware(session, { system })`; the session is shared by every request on that model object, so key it by what must share placeholders (user, case).
+- A remote ref that resolves to a plain model id string cannot be wrapped and throws instead of sending text in clear.
+- `ANON_SYSTEM` (German): „Platzhalter wie NAME_PATIENT_xxxx oder DATE_BIRTH_xxxx stehen für echte Werte. Übernimm sie wörtlich und unverändert; rate nicht, was dahintersteht.“ The decorator has no `document` option: compose and chat carry the document inside the prompt, which the middleware anonymizes anyway.
+- Everything that must stay local (embeddings, transcription) is not a language model and bypasses the decorator; keep it local yourself.
+
 ## Ledger
 
 `anon anonymize -s` writes `~/.local/share/forge-anon/ledgers/<key>.yaml` (directory 0700, file 0600) with the source file name, creation time, style, detectors, SHA-256 of source and anonymized text, and every `placeholder → original` pair. Ledgers written by the earlier Python `clinico-anon` stay readable (`entity_type` is read as `kind`).

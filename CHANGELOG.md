@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- `@skaile/forge-anon/ai-sdk`: `anonymizingModelProvider(inner, { sessionFor, isRemote, system? })` decorates a model provider (anything with `languageModel(ref, user)`, e.g. forge-editor's `ModelProvider`). A remote ref (`isRemote`) gets its model wrapped with `anonLanguageModelMiddleware(await sessionFor(user, ref), { system })`; a local ref returns the identical model object; `null` stays `null` without calling `isRemote`/`sessionFor`; a remote ref that resolves to a plain model id string throws (it cannot be wrapped). Other properties of `inner` are kept.
+- New exports `ANON_SYSTEM` (German default system message for wrapped calls) and the type `AnonProviderOptions<Ref>`.
+- `src/ai-sdk.ts` now imports `wrapLanguageModel` from `ai` at runtime (was types only); `ai` stays an optional peer needed by this entry.
+
 ## 0.3.2
 
 - Released through npm trusted publishing (GitHub OIDC from `publish.yml`); no npm token is stored. No package changes.
