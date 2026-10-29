@@ -196,79 +196,6 @@ export type AnonMiddlewareOptions = {
 
 const DEFAULT_DOCUMENT_LABEL = 'Das aktuelle Dokument des Nutzers:'
 
-/**
- * Anonymizes every string the prompt carries (user/assistant text, assistant tool-call input leaf by leaf, tool results)
- * and restores placeholders in the answer: streamed text incrementally (a placeholder can straddle deltas, so the
- * restorer buffers a partial `<...` until it closes) and tool calls as parsed JSON. `tool-input-delta` parts pass
- * through untouched: consumers act on the finished `tool-call` part. Fail closed: when anonymizing throws, the
- * model is never called.
- */
-export function anonLanguageModelMiddleware(session: AnonSession, options: AnonMiddlewareOptions): LanguageModelMiddleware {
-  const fn: MapString = text => anonymizeText(session, text)
-
-  async function anonymizePrompt(prompt: LanguageModelV4Prompt): Promise<LanguageModelV4Prompt> {
-    const document = options.document?.trim() ? await fn(options.document) : ''
-    const label = options.documentLabel ?? DEFAULT_DOCUMENT_LABEL
-    const system = document ? `${options.system}\n\n${label}\n\n<document>\n${document}\n</document>` : options.system
-    const out: LanguageModelV4Prompt = [{ role: 'system', content: system }]
-    for (const message of prompt) out.push(await anonymizeMessage(message, fn))
-    return out
-  }
-
-  return {
-    async transformParams({ params }) {
-      return { ...params, prompt: await anonymizePrompt(params.prompt) }
-    },
-    async wrapGenerate({ doGenerate }) {
-      const result = await doGenerate()
-      return { ...result, content: result.content.map(part => restoreContent(session, part)) }
-    },
-    async wrapStream({ doStream }) {
-      const { stream, ...rest } = await doStream()
-      const restorer = session.streamRestorer()
-      // Reasoning is restored too (it can re-enter the next step's prompt, where a leftover placeholder would collide); one restorer per reasoning block.
-      const reasoning = new Map<string, ReturnType<typeof session.streamRestorer>>()
-      const reasoningRestorer = (id: string) => {
-        let r = reasoning.get(id)
-        if (!r) reasoning.set(id, (r = session.streamRestorer()))
-        return r
-      }
-      const transform = new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
-        transform(part, controller) {
-          if (part.type === 'text-delta') {
-            const delta = restorer.push(part.delta)
-            if (delta) controller.enqueue({ ...part, delta })
-            return
-          }
-          if (part.type === 'reasoning-delta') {
-            const delta = reasoningRestorer(part.id).push(part.delta)
-            if (delta) controller.enqueue({ ...part, delta })
-            return
-          }
-          if (part.type === 'reasoning-end') {
-            const tail = reasoningRestorer(part.id).flush()
-            reasoning.delete(part.id)
-            if (tail) controller.enqueue({ type: 'reasoning-delta', id: part.id, delta: tail })
-          }
-          if (part.type === 'text-end') {
-            const tail = restorer.flush()
-            if (tail) controller.enqueue({ type: 'text-delta', id: part.id, delta: tail })
-          }
-          if (part.type === 'tool-call') {
-            controller.enqueue({ ...part, input: restoreToolInput(session, part.input) })
-            return
-          }
-          controller.enqueue(part)
-        }
-      })
-      return { stream: stream.pipeThrough(transform), ...rest }
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// file refusal
-
 /** Message of the refusal; German like the rest of the app-facing strings. */
 export const REMOTE_FILES_REFUSED = 'Bilder und Dateien gehen nicht an ein Remote-Modell (nicht anonymisierbar); lokales Modell verwenden.'
 
@@ -297,13 +224,90 @@ function promptCarriesFile(prompt: LanguageModelV4Prompt): boolean {
 }
 
 /**
- * Refuses (throws before the model is called) a prompt with file parts. `anonLanguageModelMiddleware` passes such
- * parts through unchanged because their bytes cannot be anonymized; a remote model must never get them.
+ * Anonymizes every string the prompt carries (user/assistant text, assistant tool-call input leaf by leaf, tool results)
+ * and restores placeholders in the answer: streamed text incrementally (a placeholder can straddle deltas, so the
+ * restorer buffers a partial `<...` until it closes) and tool calls as parsed JSON. `tool-input-delta` parts pass
+ * through untouched: consumers act on the finished `tool-call` part. A stream that ends in `finish` without
+ * `text-end`/`reasoning-end` still delivers the restored tail before `finish`.
+ *
+ * Fail closed: a prompt with file or image parts, custom parts or non-text tool-result content is refused
+ * (throws `REMOTE_FILES_REFUSED`) because their bytes cannot be anonymized, and when anonymizing throws; in both
+ * cases the model is never called.
  */
-const refuseFilesMiddleware: LanguageModelMiddleware = {
-  transformParams({ params }) {
-    if (promptCarriesFile(params.prompt)) throw new Error(REMOTE_FILES_REFUSED)
-    return Promise.resolve(params)
+export function anonLanguageModelMiddleware(session: AnonSession, options: AnonMiddlewareOptions): LanguageModelMiddleware {
+  const fn: MapString = text => anonymizeText(session, text)
+
+  async function anonymizePrompt(prompt: LanguageModelV4Prompt): Promise<LanguageModelV4Prompt> {
+    const document = options.document?.trim() ? await fn(options.document) : ''
+    const label = options.documentLabel ?? DEFAULT_DOCUMENT_LABEL
+    const system = document ? `${options.system}\n\n${label}\n\n<document>\n${document}\n</document>` : options.system
+    const out: LanguageModelV4Prompt = [{ role: 'system', content: system }]
+    for (const message of prompt) out.push(await anonymizeMessage(message, fn))
+    return out
+  }
+
+  return {
+    async transformParams({ params }) {
+      if (promptCarriesFile(params.prompt)) throw new Error(REMOTE_FILES_REFUSED)
+      return { ...params, prompt: await anonymizePrompt(params.prompt) }
+    },
+    async wrapGenerate({ doGenerate }) {
+      const result = await doGenerate()
+      return { ...result, content: result.content.map(part => restoreContent(session, part)) }
+    },
+    async wrapStream({ doStream }) {
+      const { stream, ...rest } = await doStream()
+      const restorer = session.streamRestorer()
+      // Reasoning is restored too (it can re-enter the next step's prompt, where a leftover placeholder would collide); one restorer per reasoning block.
+      const reasoning = new Map<string, ReturnType<typeof session.streamRestorer>>()
+      const reasoningRestorer = (id: string) => {
+        let r = reasoning.get(id)
+        if (!r) reasoning.set(id, (r = session.streamRestorer()))
+        return r
+      }
+      let lastTextId = '0'
+      const transform = new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
+        transform(part, controller) {
+          if (part.type === 'text-start') lastTextId = part.id
+          if (part.type === 'text-delta') {
+            lastTextId = part.id
+            const delta = restorer.push(part.delta)
+            if (delta) controller.enqueue({ ...part, delta })
+            return
+          }
+          if (part.type === 'reasoning-delta') {
+            const delta = reasoningRestorer(part.id).push(part.delta)
+            if (delta) controller.enqueue({ ...part, delta })
+            return
+          }
+          if (part.type === 'reasoning-end') {
+            const tail = reasoningRestorer(part.id).flush()
+            reasoning.delete(part.id)
+            if (tail) controller.enqueue({ type: 'reasoning-delta', id: part.id, delta: tail })
+          }
+          if (part.type === 'text-end') {
+            const tail = restorer.flush()
+            if (tail) controller.enqueue({ type: 'text-delta', id: part.id, delta: tail })
+          }
+          if (part.type === 'finish') {
+            // A stream can end without `text-end`/`reasoning-end`: the tails held back by the restorers must not be lost.
+            for (const [id, r] of reasoning) {
+              const tail = r.flush()
+              if (tail) controller.enqueue({ type: 'reasoning-delta', id, delta: tail })
+            }
+            reasoning.clear()
+            const tail = restorer.flush()
+            if (tail) controller.enqueue({ type: 'text-delta', id: lastTextId, delta: tail })
+          }
+          if (part.type === 'tool-call') {
+            controller.enqueue({ ...part, input: restoreToolInput(session, part.input) })
+            return
+          }
+          controller.enqueue(part)
+        }
+      })
+      return { stream: stream.pipeThrough(transform), ...rest }
+    }
   }
 }
 
@@ -336,9 +340,9 @@ export type AnonProviderOptions<Ref> = {
  *
  * `null` from the inner provider stays `null`, and `isRemote`/`sessionFor` are then not called. A remote ref
  * that resolves to a model id string (resolved by the AI SDK's global provider, which cannot be wrapped) throws:
- * the text is never sent un-anonymized. A prompt with file parts (images, PDF pages, inline files, non-text tool
- * results) is refused with `REMOTE_FILES_REFUSED` before the inner model is called: their bytes cannot be
- * anonymized. `anonLanguageModelMiddleware` itself still passes such parts through unchanged.
+ * the text is never sent un-anonymized. A prompt with file or image parts, custom parts or non-text tool results
+ * is refused with `REMOTE_FILES_REFUSED` before the inner model is called (`anonLanguageModelMiddleware` does it):
+ * their bytes cannot be anonymized.
  */
 export function anonymizingModelProvider<P extends ProviderOf<never>>(inner: P, options: AnonProviderOptions<RefOf<P>>): P
 export function anonymizingModelProvider(inner: ProviderOf<unknown>, options: AnonProviderOptions<unknown>): ProviderOf<unknown> {
@@ -351,7 +355,7 @@ export function anonymizingModelProvider(inner: ProviderOf<unknown>, options: An
     if (!(await options.isRemote(ref))) return model
     if (typeof model === 'string') throw new Error('Remote-Modell als Modell-ID: kann nicht anonymisiert werden')
     const session = await options.sessionFor(user, ref)
-    return wrapLanguageModel({ model, middleware: [refuseFilesMiddleware, anonLanguageModelMiddleware(session, { system })] })
+    return wrapLanguageModel({ model, middleware: anonLanguageModelMiddleware(session, { system }) })
   }
   return Object.assign(copy, { languageModel })
 }

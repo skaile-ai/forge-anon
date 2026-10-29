@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { LanguageModelV4, LanguageModelV4Prompt, LanguageModelV4StreamPart } from '@ai-sdk/provider'
 import { wrapLanguageModel } from 'ai'
 import type { LanguageModelMiddleware } from 'ai'
-import { anonLanguageModelMiddleware, anonymizeJson, createAnonSessionStore, DEFAULT_IDLE_TTL_MS, restoreJson } from '../src/ai-sdk.ts'
+import { anonLanguageModelMiddleware, anonymizeJson, createAnonSessionStore, DEFAULT_IDLE_TTL_MS, REMOTE_FILES_REFUSED, restoreJson } from '../src/ai-sdk.ts'
 import { DEFAULT_CONFIG } from '../src/config.ts'
 import type { AnonConfig } from '../src/config.ts'
 import { regexDetector } from '../src/detectors/regex.ts'
@@ -326,6 +326,108 @@ describe('anonLanguageModelMiddleware', () => {
     const sent = promptText(out.prompt)
     expect(sent).toContain(uuid)
     expect(sent).not.toContain('Mustermann')
+  })
+
+  test('file and image parts and non-text tool-result content are refused before the model is called', async () => {
+    let calls = 0
+    const spy = {
+      specificationVersion: 'v4',
+      provider: 'spy',
+      modelId: 'spy',
+      supportedUrls: {},
+      doGenerate: async () => {
+        calls++
+        throw new Error('unexpected doGenerate')
+      },
+      doStream: async () => {
+        calls++
+        return { stream: textStream(['x']) }
+      }
+    } as unknown as LanguageModelV4
+    const prompts: Record<string, unknown[]> = {
+      'user file part': [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Was zeigt die Seite?' },
+            { type: 'file', mediaType: 'image/png', data: { type: 'data', data: new Uint8Array([1, 2, 3]) } }
+          ]
+        }
+      ],
+      'tool result content': [
+        {
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: 'c1',
+              toolName: 'scan',
+              output: { type: 'content', value: [{ type: 'file', mediaType: 'application/pdf', data: { type: 'data', data: 'AAAA' } }] }
+            }
+          ]
+        }
+      ]
+    }
+    for (const [label, prompt] of Object.entries(prompts)) {
+      const mw = anonLanguageModelMiddleware(newSession(), { system: SYSTEM })
+      await expect(transform(mw, prompt), label).rejects.toThrow(REMOTE_FILES_REFUSED)
+      const model = wrapLanguageModel({ model: spy, middleware: mw })
+      await expect(model.doGenerate({ prompt } as never), label).rejects.toThrow(REMOTE_FILES_REFUSED)
+      await expect(model.doStream({ prompt } as never), label).rejects.toThrow(REMOTE_FILES_REFUSED)
+    }
+    expect(calls).toBe(0)
+  })
+
+  test('a stream that ends in finish without text-end still delivers the held placeholder tail before finish', async () => {
+    const session = newSession()
+    await session.anonymize(DOCUMENT)
+    const date = session.entities.find(e => e.original === '12.03.1970')!
+    const mw = anonLanguageModelMiddleware(session, { system: SYSTEM })
+    const cut = Math.floor(date.placeholder.length / 2)
+    const parts = await streamed(
+      mw,
+      partsStream([
+        { type: 'text-start', id: 't9' },
+        { type: 'text-delta', id: 't9', delta: `Am ${date.placeholder.slice(0, cut)}` }
+      ])
+    )
+    const finish = parts.findIndex(p => p.type === 'finish')
+    expect(finish).toBe(parts.length - 1)
+    expect(parts.some(p => p.type === 'text-end')).toBe(false)
+    const deltas = parts.filter(p => p.type === 'text-delta') as { id: string; delta: string }[]
+    expect(deltas.map(p => p.delta).join('')).toBe(`Am ${date.placeholder.slice(0, cut)}`)
+    expect(parts[finish - 1]).toEqual({ type: 'text-delta', id: 't9', delta: `${date.placeholder.slice(0, cut)}` })
+
+    // A complete placeholder in the last delta is restored as usual and leaves no extra tail.
+    const whole = await streamed(
+      mw,
+      partsStream([
+        { type: 'text-start', id: 't9' },
+        { type: 'text-delta', id: 't9', delta: `Am ${date.placeholder} und <` }
+      ])
+    )
+    expect(whole.filter(p => p.type === 'text-delta').map(p => (p as { delta: string }).delta).join('')).toBe('Am 12.03.1970 und <')
+    expect(whole.at(-2)).toEqual({ type: 'text-delta', id: 't9', delta: '<' })
+  })
+
+  test('an open reasoning block is flushed before finish as well', async () => {
+    const session = newSession()
+    await session.anonymize(DOCUMENT) // a session without entities has nothing to hold back
+    const date = session.entities.find(e => e.original === '12.03.1970')!
+    const mw = anonLanguageModelMiddleware(session, { system: SYSTEM })
+    const partial = date.placeholder.slice(0, Math.floor(date.placeholder.length / 2))
+    const parts = await streamed(
+      mw,
+      partsStream([
+        { type: 'reasoning-start', id: 'r7' },
+        { type: 'reasoning-delta', id: 'r7', delta: `Termin ${date.placeholder}, dann ${partial}` }
+      ])
+    )
+    expect(parts.at(-1)).toMatchObject({ type: 'finish' })
+    expect(parts.some(p => p.type === 'reasoning-end')).toBe(false)
+    expect(parts.at(-2)).toEqual({ type: 'reasoning-delta', id: 'r7', delta: partial })
+    const reasoning = parts.filter(p => p.type === 'reasoning-delta').map(p => (p as { delta: string }).delta).join('')
+    expect(reasoning).toBe(`Termin 12.03.1970, dann ${partial}`)
   })
 })
 

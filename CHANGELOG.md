@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `AnonSession.anonymize` memoizes identical texts (bounded LRU, 512 entries): a repeat call returns the earlier result, runs no detector and adds no `occurrences`. The cache is cleared whenever the mapping gains a placeholder, so older texts are re-anonymized and pick up the new original. A conversation that resends its history every turn no longer re-runs the detectors over every earlier message.
+- `anonLanguageModelMiddleware` now refuses file and image parts itself: a prompt with `file`, `reasoning-file`, `custom` parts or non-text tool-result content makes `transformParams` throw `REMOTE_FILES_REFUSED` before the model is called. Before, only `anonymizingModelProvider` refused them (through a separate middleware, now removed); a host using the middleware directly sent such parts through unchanged. The provider behaviour is unchanged.
+- `anonLanguageModelMiddleware` stream: on `finish` without a preceding `text-end`/`reasoning-end`, the tail held back by the stream restorer is now emitted as a `text-delta`/`reasoning-delta` before `finish`. Before, a stream that ended that way lost a trailing partial placeholder.
+
 ## 0.4.1
 
 ### Fixed
