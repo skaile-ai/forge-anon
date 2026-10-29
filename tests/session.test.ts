@@ -158,9 +158,89 @@ describe('createAnonSession', () => {
     let calls = 0
     const detectors = [fake('onnx', [{ text: 'Müller', kind: NAME }], () => calls++)]
     const s = createAnonSession({ ...presidio(), detectors })
-    await s.anonymize('Müller')
-    await s.anonymize('Müller')
+    await s.anonymize('Müller kam')
+    await s.anonymize('Müller ging')
     expect(calls).toBe(2)
+  })
+
+  describe('memo cache', () => {
+    const counting = (needles: { text: string; kind: EntityKind }[]) => {
+      const count = { calls: 0 }
+      return { count, detectors: [fake('onnx', needles, () => count.calls++)] }
+    }
+
+    test('the same text twice runs the detectors once, returns the same text and adds no occurrences', async () => {
+      const { count, detectors } = counting([{ text: 'Schmidt', kind: NAME }])
+      const s = createAnonSession({ ...presidio(), detectors })
+      const a = await s.anonymize('Schmidt und Schmidt')
+      const b = await s.anonymize('Schmidt und Schmidt')
+      expect(count.calls).toBe(1)
+      expect(b).toBe(a)
+      expect(b.text).toBe(a.text)
+      expect(s.entities).toHaveLength(1)
+      expect(s.entities[0]!.occurrences).toBe(2)
+    })
+
+    test('a text that adds a new original clears the cache: the first text runs the detectors again', async () => {
+      const { count, detectors } = counting([{ text: 'Meier', kind: NAME }])
+      const s = createAnonSession({ ...presidio(), detectors })
+      await s.anonymize('Hallo Welt')
+      expect(count.calls).toBe(1)
+      await s.anonymize('Hallo Welt')
+      expect(count.calls).toBe(1)
+      await s.anonymize('Meier kam')
+      expect(count.calls).toBe(2)
+      await s.anonymize('Hallo Welt')
+      expect(count.calls).toBe(3)
+      await s.anonymize('Hallo Welt')
+      expect(count.calls).toBe(3)
+    })
+
+    test('an older text picks up an original that became known later', async () => {
+      // The detector only fires on a text that starts with "Meier"; in "ohne Meier" only the session mapping can match it.
+      const startsWithMeier: Detector = {
+        name: 'onnx',
+        async detect(text) {
+          return text.startsWith('Meier') ? [{ start: 0, end: 5, text: 'Meier', kind: NAME, score: 0.9, detector: 'onnx' }] : []
+        }
+      }
+      const s = createAnonSession({ ...presidio(), detectors: [startsWithMeier] })
+      const first = await s.anonymize('ohne Meier')
+      expect(first.text).toBe('ohne Meier')
+      await s.anonymize('Meier kam')
+      const ph = s.entities[0]!.placeholder
+      const old = await s.anonymize('ohne Meier')
+      expect(old).not.toBe(first)
+      expect(old.text).toBe(`ohne ${ph}`)
+    })
+
+    test('a result without new entities leaves the cache intact', async () => {
+      const { count, detectors } = counting([{ text: 'Schmidt', kind: NAME }])
+      const s = createAnonSession({ ...presidio(), detectors })
+      await s.anonymize('Hallo Welt')
+      await s.anonymize('Schmidt kam')
+      expect(count.calls).toBe(2)
+      await s.anonymize('Schmidt ging') // known original: mapping gains no placeholder
+      expect(count.calls).toBe(3)
+      await s.anonymize('Schmidt kam')
+      await s.anonymize('Schmidt ging')
+      expect(count.calls).toBe(3)
+    })
+
+    test('the cache is bounded: the oldest text is evicted past 512 entries (LRU)', async () => {
+      const { count, detectors } = counting([{ text: 'Schmidt', kind: NAME }])
+      const s = createAnonSession({ ...presidio(), detectors })
+      for (let i = 0; i < 512; i++) await s.anonymize(`text ${i}`)
+      expect(count.calls).toBe(512)
+      await s.anonymize('text 0') // hit, becomes the most recent
+      expect(count.calls).toBe(512)
+      await s.anonymize('text 512') // 513th entry evicts 'text 1', not the touched 'text 0'
+      expect(count.calls).toBe(513)
+      await s.anonymize('text 0')
+      expect(count.calls).toBe(513)
+      await s.anonymize('text 1')
+      expect(count.calls).toBe(514)
+    })
   })
 
   test('overlapping calls are serialised: one token per new original', async () => {

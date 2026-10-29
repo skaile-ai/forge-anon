@@ -12,7 +12,14 @@ export type AnonSessionOptions = Omit<AnonymizeOptions, 'mapping' | 'manual'>
 export type AnonSession = {
   /** Cumulative mapping of all texts anonymized so far (`occurrences` summed over the calls). */
   readonly entities: readonly Entity[]
-  /** Anonymizes `text` with the session mapping: known originals keep their placeholder, new ones extend it. Calls run one after another. */
+  /**
+   * Anonymizes `text` with the session mapping: known originals keep their placeholder, new ones extend it. Calls run one after another.
+   *
+   * An identical text is anonymized once per mapping generation (bounded LRU, 512 texts): a repeat call returns the earlier
+   * result object and adds no `occurrences`, so a conversation that resends its history every turn does not re-run the detectors.
+   * The cache is cleared whenever the mapping gains a placeholder, because a text anonymized before an original became known
+   * could still carry it (known originals are matched by exact text, without a detector hit).
+   */
   anonymize(text: string): Promise<AnonymizeResult>
   /** Lenient restore (also LLM-mangled placeholders) with the current mapping. */
   restore(text: string): string
@@ -20,10 +27,13 @@ export type AnonSession = {
   streamRestorer(): StreamRestorer
 }
 
+const CACHE_LIMIT = 512
+
 export function createAnonSession(opts: AnonSessionOptions): AnonSession {
   // Built once: the ONNX model loads on first use and is reused by every call of the session.
   const detectors: Detector[] = opts.detectors ?? buildDetectors(opts)
   const byPlaceholder = new Map<string, Entity>()
+  const cache = new Map<string, AnonymizeResult>()
   let entities: readonly Entity[] = []
   let tail: Promise<unknown> = Promise.resolve()
 
@@ -43,8 +53,18 @@ export function createAnonSession(opts: AnonSessionOptions): AnonSession {
     anonymize(text) {
       // Serialised: two overlapping calls must not both draw tokens for the same new original.
       const next = tail.then(async () => {
+        const hit = cache.get(text)
+        if (hit) {
+          cache.delete(text)
+          cache.set(text, hit) // LRU touch
+          return hit
+        }
         const result = await anonymize(text, { ...opts, detectors, mapping: entities })
+        const known = byPlaceholder.size
         merge(result)
+        if (byPlaceholder.size !== known) cache.clear() // a new original may hide in older texts: re-anonymize them next time
+        cache.set(text, result)
+        if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value!)
         return result
       })
       tail = next.catch(() => undefined)
