@@ -318,6 +318,23 @@ export const editorModels = anonymizingModelProvider(inner, {
 - `ANON_SYSTEM` (German): „Platzhalter wie NAME_PATIENT_xxxx oder DATE_BIRTH_xxxx stehen für echte Werte. Übernimm sie wörtlich und unverändert; rate nicht, was dahintersteht.“ The decorator has no `document` option: compose and chat carry the document inside the prompt, which the middleware anonymizes anyway.
 - Everything that must stay local (embeddings, transcription) is not a language model and bypasses the decorator; keep it local yourself.
 
+## Transform proxy (`@skaile/forge-anon/proxy`)
+
+The default export is the `anon` transform module for [`@skaile/transform-proxy`](https://github.com/skaile-ai/skaile-transform-proxy), a passthrough proxy that runs model requests and replies through text transforms. Install both packages and name the module in the proxy config:
+
+```yaml
+transforms:
+  anon: { module: "@skaile/forge-anon/proxy", config: { config: anon.config.yaml, markdown: true } }
+pipelines:
+  default: [anon]
+defaultPipeline: default
+```
+
+- `config` (optional): forge-anon config file, relative to the proxy `baseDir`. Without it the usual layers apply (`~/.config/forge-anon/config.yaml`, `<baseDir>/anon.config.yaml`, `$ANON_CONFIG`). `markdown` defaults to `true`. Unknown keys or wrong types make `open` throw.
+- The detectors are built once per proxy; each proxy session gets its own `AnonSession` and the `ANON_SYSTEM` instruction.
+- Session facts whose `kind` is an entity kind (`NAME_PATIENT`, `DATE_BIRTH`, ...) are added with `extend` before the next outbound text; other kinds are ignored. Facts that are removed later stay mapped, so placeholders already sent still restore.
+- Placeholders of the token styles contain no JSON escape characters, so the proxy can restore them inside streamed tool-call arguments.
+
 ## Ledger
 
 `anon anonymize -s` writes `~/.local/share/forge-anon/ledgers/<key>.yaml` (directory 0700, file 0600) with the source file name, creation time, style, detectors, SHA-256 of source and anonymized text, and every `placeholder → original` pair. Ledgers written by the earlier Python `clinico-anon` stay readable (`entity_type` is read as `kind`).

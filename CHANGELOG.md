@@ -1,8 +1,9 @@
 # Changelog
 
-## 0.6.0 (unreleased)
+## 0.6.0
 
 - `AnonSession.extend(known: { kind, original }[])` adds known originals that no detector has to find. Each gets a fresh placeholder with `occurrences: 0`; originals already in the mapping, repeats within the call and blank originals are skipped. Later texts replace them by exact match and `restore` maps them back. Adding anything clears the memo cache. It runs through the same queue as `anonymize` and returns a `Promise<void>`.
+- New subpath `@skaile/forge-anon/proxy`: the `anon` transform module for `@skaile/transform-proxy` (optional peer, types only). `open` validates `{ config?, markdown? }` (config path relative to the proxy `baseDir`) and builds the detectors once; each proxy session gets its own `AnonSession`, adds published session facts whose kind is an entity kind via `extend` before the next outbound text, and restores replies (whole and streamed).
 
 ## 0.5.0
 
