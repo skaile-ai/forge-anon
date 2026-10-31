@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+- The optional peer `@skaile/transform-proxy` accepts every 0.x release (`>=0.1.0 <1.0.0`); `^0.1.0` excluded 0.2.0, so `npm i @skaile/forge-anon @skaile/transform-proxy` failed with ERESOLVE.
+
 ## 0.6.0
 
 - `AnonSession.extend(known: { kind, original }[])` adds known originals that no detector has to find. Each gets a fresh placeholder with `occurrences: 0`; originals already in the mapping, repeats within the call and blank originals are skipped. Later texts replace them by exact match and `restore` maps them back. Adding anything clears the memo cache. It runs through the same queue as `anonymize` and returns a `Promise<void>`.
