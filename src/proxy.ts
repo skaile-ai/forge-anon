@@ -42,12 +42,14 @@ const anon: TransformModule = {
       const transform: Transform = {
         instruction: ANON_SYSTEM,
         async outbound(text) {
-          if (facts.version !== seen) {
-            seen = facts.version
+          const version = facts.version
+          if (version !== seen) {
             // Facts that disappear stay mapped: an already sent placeholder must still restore.
             await session.extend(facts.list()
               .filter(f => KINDS.has(f.kind))
               .map(f => ({ kind: f.kind as EntityKind, original: f.value })))
+            // Only once applied: after a failed update the next outbound retries it instead of sending the facts in clear.
+            seen = version
           }
           return (await session.anonymize(text)).text
         },

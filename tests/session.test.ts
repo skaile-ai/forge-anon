@@ -360,4 +360,33 @@ describe('AnonSession.extend', () => {
     const phs = s.entities.map(e => e.placeholder)
     expect(new Set(phs).size).toBe(2)
   })
+
+  test('semantic style: extend numbers like detected entities, and anonymize/restore round-trip', async () => {
+    const s = createAnonSession({ config: config('semantic'), detectors: [fake('onnx', [{ text: 'Schmidt', kind: NAME }])] })
+    await s.extend([{ kind: NAME, original: 'Müller' }, { kind: 'LOCATION_CITY', original: 'Quastenhausen' }])
+    expect(s.entities.map(e => [e.original, e.placeholder])).toEqual([['Müller', '{{person1}}'], ['Quastenhausen', '{{ort1}}']])
+    const text = 'Müller traf Schmidt in Quastenhausen.'
+    const res = await s.anonymize(text)
+    expect(res.text).toBe('{{person1}} traf {{person2}} in {{ort1}}.')
+    expect(s.restore(res.text)).toBe(text)
+  })
+
+  test('default style: extend, anonymize and restore round-trip', async () => {
+    const s = createAnonSession({ config: structuredClone(DEFAULT_CONFIG), detectors: [] })
+    await s.extend([{ kind: NAME, original: 'Müller' }])
+    const text = 'Herr Müller kam.'
+    const res = await s.anonymize(text)
+    expect(res.text).not.toContain('Müller')
+    expect(s.restore(res.text)).toBe(text)
+  })
+
+  test('semantic style: an original equal to a Stammdaten rule takes the rule placeholder', async () => {
+    const s = createAnonSession({ config: config('semantic'), detectors: [], stammdaten: { vorname: 'Brunhilde', nachname: 'Quast' } })
+    await s.extend([{ kind: NAME, original: 'Brunhilde Quast' }, { kind: NAME, original: 'Müller' }])
+    expect(s.entities.map(e => e.placeholder)).toEqual(['{{name}}', '{{person1}}'])
+    const text = 'Brunhilde Quast und Müller'
+    const res = await s.anonymize(text)
+    expect(res.text).toBe('{{name}} und {{person1}}')
+    expect(s.restore(res.text)).toBe(text)
+  })
 })

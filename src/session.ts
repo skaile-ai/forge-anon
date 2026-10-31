@@ -1,9 +1,7 @@
 // Session: one cumulative placeholder mapping across many texts (a conversation); detectors are built once.
 
 import type { Detector } from './detectors/types.ts'
-import { getStyle } from './placeholders.ts'
-import type { PlaceholderStyle } from './placeholders.ts'
-import { anonymize, buildDetectors } from './pipeline.ts'
+import { allocatePlaceholders, anonymize, buildDetectors } from './pipeline.ts'
 import type { AnonymizeOptions, AnonymizeResult } from './pipeline.ts'
 import { createStreamRestorer, restore } from './restore.ts'
 import type { StreamRestorer } from './restore.ts'
@@ -24,9 +22,11 @@ export type AnonSession = {
    */
   anonymize(text: string): Promise<AnonymizeResult>
   /**
-   * Adds known originals that no detector has to find (e.g. facts a connector published). Each new original gets a fresh
-   * placeholder with `occurrences: 0`. Originals the mapping already holds, repeats within the call and blank originals are
-   * skipped. Later texts replace the originals by exact match, and `restore` maps them back. Adding anything clears the memo
+   * Adds known originals that no detector has to find (e.g. facts a connector published). Each new original gets a
+   * placeholder the way `anonymize` allocates one for a detected entity in the session's style (`semantic` numbers on
+   * after the mapping, `{{person2}}`; an original equal to a Stammdaten rule takes the rule's placeholder), with
+   * `occurrences: 0`. Originals the mapping already holds, repeats within the call and blank originals are skipped.
+   * Later texts replace the originals by exact match, and `restore` maps them back. Adding anything clears the memo
    * cache. Serialised with `anonymize` through the same queue: the returned promise resolves once the addition is applied.
    */
   extend(known: readonly { kind: EntityKind; original: string }[]): Promise<void>
@@ -44,12 +44,10 @@ export const ANON_SYSTEM =
   'Platzhalter wie NAME_PATIENT_xxxx oder DATE_BIRTH_xxxx stehen für echte Werte. Übernimm sie wörtlich und unverändert; rate nicht, was dahintersteht.'
 
 const CACHE_LIMIT = 512
-const MAX_ATTEMPTS = 10
 
 export function createAnonSession(opts: AnonSessionOptions): AnonSession {
   // Built once: the ONNX model loads on first use and is reused by every call of the session.
   const detectors: Detector[] = opts.detectors ?? buildDetectors(opts)
-  const style: PlaceholderStyle = opts.style ?? getStyle(opts.config.placeholders.style)
   const byPlaceholder = new Map<string, Entity>()
   const cache = new Map<string, AnonymizeResult>()
   let entities: readonly Entity[] = []
@@ -65,19 +63,16 @@ export function createAnonSession(opts: AnonSessionOptions): AnonSession {
   }
 
   function addKnown(known: readonly { kind: EntityKind; original: string }[]): void {
-    const originals = new Set([...byPlaceholder.values()].map(e => e.original))
-    const added: Entity[] = []
-    for (const k of known) {
-      if (!k.original.trim() || originals.has(k.original)) continue
+    const originals = new Set(entities.map(e => e.original))
+    const fresh = known.filter(k => {
+      if (!k.original.trim() || originals.has(k.original)) return false
       originals.add(k.original)
-      let placeholder = style.token(k.kind)
-      for (let i = 0; i < MAX_ATTEMPTS && byPlaceholder.has(placeholder); i++) placeholder = style.token(k.kind)
-      if (byPlaceholder.has(placeholder)) throw new Error(`Platzhalter-Erzeugung erschöpft für ${k.kind}`)
-      const entity: Entity = { placeholder, original: k.original, kind: k.kind, detector: 'manual', occurrences: 0 }
-      byPlaceholder.set(placeholder, entity)
-      added.push(entity)
-    }
+      return true
+    })
+    if (fresh.length === 0) return
+    const added = allocatePlaceholders(fresh, { ...opts, mapping: entities })
     if (added.length === 0) return
+    for (const e of added) byPlaceholder.set(e.placeholder, e)
     entities = [...byPlaceholder.values()]
     cache.clear() // texts anonymized before now may still hold these originals in clear
   }

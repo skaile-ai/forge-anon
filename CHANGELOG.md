@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.2
+
+- `@skaile/forge-anon/proxy`: a fact update that fails (a throwing `facts.list()` or a rejected `extend`) is retried on the next outbound text. Before, the facts version was marked as seen before the update ran, so the retry at the same version skipped it and could send the fact values in clear.
+- `AnonSession.extend` allocates placeholders the way `anonymize` does for detected entities, so it works with every placeholder style: `semantic` numbers on after the mapping (`{{person1}}`, `{{ort1}}`), and an original equal to a Stammdaten rule takes the rule's placeholder. Before, `extend` threw `semantic style: key required` with the `semantic` style.
+
 ## 0.6.1
 
 - The optional peer `@skaile/transform-proxy` accepts every 0.x release (`>=0.1.0 <1.0.0`); `^0.1.0` excluded 0.2.0, so `npm i @skaile/forge-anon @skaile/transform-proxy` failed with ERESOLVE.

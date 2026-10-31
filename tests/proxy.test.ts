@@ -84,6 +84,39 @@ describe('anon proxy transform module', () => {
     expect(await t.outbound(text, leaf)).toBe(out)
   })
 
+  test('a failed fact update is retried: the next outbound at the same version still maps the facts', async () => {
+    const facts = mutableFacts()
+    const t = await (await openRegexOnly())({ sessionId: 's', facts, log })
+    facts.set([{ kind: 'NAME_PATIENT', value: 'Brunhilde Quast', source: 'conn' }])
+    const list = facts.list
+    let fail = true
+    facts.list = kind => {
+      if (fail) {
+        fail = false
+        throw new Error('facts unavailable')
+      }
+      return list(kind)
+    }
+    const text = 'Patientin Brunhilde Quast kam heute.'
+    await expect(t.outbound(text, leaf)).rejects.toThrow('facts unavailable')
+    const out = await t.outbound(text, leaf)
+    expect(out).not.toContain('Brunhilde Quast')
+    expect(t.inbound(out)).toBe(text)
+  })
+
+  test('semantic style: a published fact is pseudonymized and restored', async () => {
+    const dir = regexOnlyDir()
+    fs.writeFileSync(path.join(dir, 'semantic.yaml'),
+      'detectors:\n  onnx:\n    enabled: false\n  llm:\n    enabled: false\nplaceholders:\n  style: semantic\n')
+    const facts = mutableFacts()
+    const t = await (await anon.open({ config: 'semantic.yaml', markdown: false }, { baseDir: dir, log }))({ sessionId: 's', facts, log })
+    facts.set([{ kind: 'NAME_PATIENT', value: 'Brunhilde Quast', source: 'conn' }])
+    const text = 'Patientin Brunhilde Quast kam.'
+    const out = await t.outbound(text, leaf)
+    expect(out).toBe('Patientin {{person1}} kam.')
+    expect(t.inbound(out)).toBe(text)
+  })
+
   test('placeholders contain no JSON escape characters', () => {
     const style = createStyle('presidio')
     for (const kind of ENTITY_KINDS) {

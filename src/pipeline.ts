@@ -342,6 +342,45 @@ function assignTokens(units: Unit[], text: string, style: PlaceholderStyle, fake
   }
 }
 
+/**
+ * Placeholders for known originals that no detector has to find (`AnonSession.extend`), allocated as `anonymize`
+ * allocates them for detected entities: an original equal to a Stammdaten rule's original (same kind group) takes that
+ * rule's placeholder; otherwise `semantic` numbers per `candidatePrefix(kind)` after the rules, the mapping and the
+ * originals before it in `known`, and the token styles draw a token no other original owns. Every returned entity has
+ * `detector: 'manual'` and `occurrences: 0`. An original whose trimmed text the mapping or an earlier entry of `known`
+ * already maps yields no entity; the caller filters out blank originals. Throws when no free placeholder is found.
+ */
+export function allocatePlaceholders(
+  known: readonly { kind: EntityKind; original: string }[],
+  opts: Pick<AnonymizeOptions, 'config' | 'stammdaten' | 'mapping' | 'style'>
+): Entity[] {
+  const style = resolveStyle(opts)
+  const rules = opts.stammdaten && opts.config.detectors.rules.enabled ? buildRules(opts.stammdaten) : []
+  const mapping = uniqueMapping(opts.mapping)
+  const registry: Rule[] = [
+    ...rules,
+    ...mapping.map(e => ({ placeholder: e.placeholder, original: e.original, kind: e.kind, pattern: NEVER, source: e.detector }))
+  ]
+  const owned = new Set(mapping.map(e => e.placeholder))
+  // A placeholder the registry gives only to other originals would restore to one of them. A reused one (a rule or
+  // mapping entry with this very original) is fine, even when a Stammdaten placeholder also covers other spellings.
+  const clash = (rule: Rule) =>
+    registry.some(r => r.placeholder === rule.placeholder) &&
+    !registry.some(r => r.placeholder === rule.placeholder && r.original === rule.original)
+  const out: Entity[] = []
+  for (const k of known) {
+    const cand: Candidate = { text: k.original, kind: k.kind, source: 'manual' }
+    let rule = addCandidate(registry, cand, style)
+    for (let i = 0; i < MAX_ATTEMPTS && clash(rule); i++) rule = addCandidate(registry, cand, style)
+    if (clash(rule)) throw new Error(`Platzhalter-Erzeugung erschöpft für ${k.kind}`)
+    if (owned.has(rule.placeholder)) continue // the same (trimmed) original is mapped already
+    owned.add(rule.placeholder)
+    registry.push(rule)
+    out.push({ placeholder: rule.placeholder, original: k.original, kind: k.kind, detector: 'manual', occurrences: 0 })
+  }
+  return out
+}
+
 export async function anonymize(text: string, opts: AnonymizeOptions): Promise<AnonymizeResult> {
   const style = resolveStyle(opts)
   const fakeNames = opts.config.placeholders.fakeNames
