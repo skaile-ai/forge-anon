@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.0 (unreleased)
+
+- `AnonSession.extend(known: { kind, original }[])` adds known originals that no detector has to find. Each gets a fresh placeholder with `occurrences: 0`; originals already in the mapping, repeats within the call and blank originals are skipped. Later texts replace them by exact match and `restore` maps them back. Adding anything clears the memo cache. It runs through the same queue as `anonymize` and returns a `Promise<void>`.
+
 ## 0.5.0
 
 - `AnonSession.anonymize` memoizes identical texts (bounded LRU, 512 entries): a repeat call returns the earlier result, runs no detector and adds no `occurrences`. The cache is cleared whenever the mapping gains a placeholder, so older texts are re-anonymized and pick up the new original. A conversation that resends its history every turn no longer re-runs the detectors over every earlier message.

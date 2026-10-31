@@ -299,3 +299,65 @@ describe('createAnonSession', () => {
     expect(s.entities).toHaveLength(1)
   })
 })
+
+describe('AnonSession.extend', () => {
+  const session = (detectors: Detector[] = []) => createAnonSession({ config: config('presidio'), detectors })
+
+  test('maps an original that no detector hits, and restore returns it', async () => {
+    const s = session()
+    await s.extend([{ kind: NAME, original: 'Müller' }])
+    const ph = s.entities.find(e => e.original === 'Müller')!.placeholder
+    expect(ph).toMatch(/^<NAME_PATIENT_/)
+    expect((await s.anonymize('Herr Müller kam')).text).toBe(`Herr ${ph} kam`)
+    expect(s.restore(`${ph} sagte nichts`)).toBe('Müller sagte nichts')
+  })
+
+  test('a text anonymized before extend is anonymized again afterwards', async () => {
+    const s = session()
+    const before = await s.anonymize('Müller ist hier')
+    expect(before.text).toBe('Müller ist hier')
+    await s.extend([{ kind: NAME, original: 'Müller' }])
+    const after = await s.anonymize('Müller ist hier')
+    expect(after).not.toBe(before)
+    expect(after.text).not.toContain('Müller')
+  })
+
+  test('an original the mapping already holds keeps its placeholder', async () => {
+    const s = session([fake('onnx', [{ text: 'Müller', kind: NAME }])])
+    await s.anonymize('Herr Müller')
+    const ph = s.entities[0]!.placeholder
+    await s.extend([{ kind: NAME, original: 'Müller' }])
+    expect(s.entities).toHaveLength(1)
+    expect(s.entities[0]!.placeholder).toBe(ph)
+  })
+
+  test('duplicates within one call and blank originals are ignored', async () => {
+    const s = session()
+    await s.extend([
+      { kind: NAME, original: 'Müller' },
+      { kind: NAME, original: 'Müller' },
+      { kind: NAME, original: '   ' },
+      { kind: NAME, original: '' }
+    ])
+    expect(s.entities.map(e => e.original)).toEqual(['Müller'])
+    expect(s.entities[0]!.occurrences).toBe(0)
+  })
+
+  test('a call that adds nothing new keeps the memo cache', async () => {
+    const s = session()
+    await s.extend([{ kind: NAME, original: 'Müller' }])
+    const first = await s.anonymize('Hallo Welt')
+    await s.extend([{ kind: NAME, original: 'Müller' }, { kind: NAME, original: '  ' }])
+    expect(await s.anonymize('Hallo Welt')).toBe(first)
+  })
+
+  test('new placeholders never reuse a placeholder of the mapping', async () => {
+    const s = session()
+    await s.extend([
+      { kind: NAME, original: 'Müller' },
+      { kind: NAME, original: 'Schmidt' }
+    ])
+    const phs = s.entities.map(e => e.placeholder)
+    expect(new Set(phs).size).toBe(2)
+  })
+})
