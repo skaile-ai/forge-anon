@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.0
+
+- `@skaile/forge-anon/proxy`: the anon transform implements `knownOriginals()` (`@skaile/transform-proxy` 0.5.0) and returns `{ kind, value }` for every original in the session mapping, detected or added from facts. The proxy's leak check uses them to warn when a value `anon` replaced in one place reaches the provider in clear elsewhere (e.g. in `tools`, or where the detector missed it in a new context). Without connectors, as in omp, the check had nothing to compare against. The check reports only kind and JSON path; the values stay in-process and are never sent.
+- devDependency `@skaile/transform-proxy` `^0.5.0`; the optional peer range `>=0.1.0 <1.0.0` is unchanged.
+
 ## 0.8.0
 
 - `@skaile/forge-anon/proxy`: the anon transform implements `inspect()` (`@skaile/transform-proxy` 0.4.0) and returns `{ entities }`, a copy of the session mapping with originals. The host reads it with `TransformProxy.inspect(sessionId)` → `{ anon: { entities } }`; it stays in-process and is never sent. New exported type `AnonProxyInspection`.

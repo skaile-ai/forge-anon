@@ -63,6 +63,25 @@ describe('anon proxy transform module', () => {
     expect(out).toContain(entity!.placeholder)
   })
 
+  test('knownOriginals lists the originals the session has replaced, facts included', async () => {
+    const facts = mutableFacts()
+    const t = await (await openRegexOnly())({ sessionId: 's', facts, log })
+    const known = () => [...(t.knownOriginals?.() ?? [])]
+    expect(known()).toEqual([])
+
+    const out = await t.outbound('Rückruf unter 089 1234567', leaf)
+    const phone = known().find(o => o.value === '089 1234567')
+    expect(phone).toBeDefined()
+    expect(out).not.toContain('089 1234567')
+
+    facts.set([{ kind: 'NAME_PATIENT', value: 'Brunhilde Quast', source: 'conn' }])
+    expect(known().some(o => o.value === 'Brunhilde Quast')).toBe(false)
+    await t.outbound('Patientin Brunhilde Quast kam heute.', leaf)
+    expect(known()).toContainEqual({ kind: 'NAME_PATIENT', value: 'Brunhilde Quast' })
+    expect(known()).toContainEqual(phone!)
+    expect(known()).not.toBe(known())
+  })
+
   test('a fact published after creation is pseudonymized and restored', async () => {
     const facts = mutableFacts()
     const t = await (await openRegexOnly())({ sessionId: 's', facts, log })

@@ -69,7 +69,14 @@ const anon: TransformModule = {
           const restorer = session.streamRestorer()
           return { push: chunk => restorer.push(chunk), flush: () => restorer.flush() }
         },
-        inspect: (): AnonProxyInspection => ({ entities: [...session.entities] })
+        inspect: (): AnonProxyInspection => ({ entities: [...session.entities] }),
+        // For the proxy's leak check only (never sent): a value replaced once must not reach the provider in clear elsewhere.
+        // Detected and fact-added originals share the mapping; a fresh, deduplicated array per call.
+        knownOriginals() {
+          const byKey = new Map<string, { kind: string; value: string }>()
+          for (const e of session.entities) byKey.set(`${e.kind}\0${e.original}`, { kind: e.kind, value: e.original })
+          return [...byKey.values()]
+        }
       }
       return transform
     }

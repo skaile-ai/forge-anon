@@ -363,6 +363,7 @@ defaultPipeline: default
 - Session facts whose `kind` is an entity kind (`NAME_PATIENT`, `DATE_BIRTH`, ...) are added with `extend` before the next outbound text; other kinds are ignored. Facts that are removed later stay mapped, so placeholders already sent still restore.
 - Placeholders of the token styles contain no JSON escape characters, so the proxy can restore them inside streamed tool-call arguments.
 - `inspect()` returns `{ entities }` for the host (`TransformProxy.inspect(sessionId)` → `{ anon: { entities } }`, type `AnonProxyInspection`). In-process only: it holds the originals and is never sent.
+- `knownOriginals()` returns `{ kind, value }` for every original the session has replaced (detected or added from facts), so the proxy's leak check can warn when such a value appears in clear elsewhere in a request (e.g. in `tools`); the check reports only kind and JSON path, and the values are never sent.
 
 ## Ledger
 

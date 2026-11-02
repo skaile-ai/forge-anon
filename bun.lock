@@ -14,7 +14,7 @@
       },
       "devDependencies": {
         "@ai-sdk/provider": "^4.0.34",
-        "@skaile/transform-proxy": "^0.4.0",
+        "@skaile/transform-proxy": "^0.5.0",
         "@types/bun": "^1.3.0",
         "@types/node": "^22.0.0",
         "ai": "^7.0.140",
@@ -162,7 +162,7 @@
 
     "@rolldown/pluginutils": ["@rolldown/pluginutils@1.0.1", "", {}, "sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw=="],
 
-    "@skaile/transform-proxy": ["@skaile/transform-proxy@0.4.0", "", { "dependencies": { "yaml": "^2.9.0" }, "bin": { "skaile-transform-proxy": "dist/cli.mjs" } }, "sha512-SI7Dg39vsfmpTgx7TUFSy4f5ktWlr4W2tMNhwmgo37ddBMTEbC8ShjTFgg3ZJbURukkFQTkMzFGa53VEPAZhsw=="],
+    "@skaile/transform-proxy": ["@skaile/transform-proxy@0.5.0", "", { "dependencies": { "yaml": "^2.9.0" }, "bin": { "skaile-transform-proxy": "dist/cli.mjs" } }, "sha512-GJYJkpWzlwzc+jqQCLB5b28odKp3rK+XGh3ICPgcJPpLcbVnXw+26joQhPi5bNphWckTOVMuLRIyL0GGzj20Nw=="],
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
 
