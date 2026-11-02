@@ -127,3 +127,47 @@ describe('anon proxy transform module', () => {
     }
   })
 })
+
+describe('anon proxy protection', () => {
+  const DEV = [
+    'DIRECTUS_URL=http://localhost:8058',
+    'gutachten-webedit-directus\tdirectus/directus:11\t0.0.0.0:8058->8055/tcp, [::]:8058->8055/tcp'
+  ].join('\n')
+  const BASE = 'detectors:\n  onnx:\n    enabled: false\n  llm:\n    enabled: false\nplaceholders:\n  style: presidio\n'
+  /** Presidio tokens without their random part, so a whole output compares exactly. */
+  const shape = (s: string): string => s.replace(/<([A-Z_]+)_[0-9a-f]{8}>/g, '<$1>')
+
+  async function transform(yaml: string) {
+    const dir = regexOnlyDir()
+    fs.writeFileSync(path.join(dir, 'protect.yaml'), BASE + yaml)
+    const factory = await anon.open({ config: 'protect.yaml', markdown: false }, { baseDir: dir, log })
+    return factory({ sessionId: 's', facts: mutableFacts(), log })
+  }
+
+  test('dev preset is on by default: localhost URL and port maps pass, a public IP is replaced', async () => {
+    const t = await transform('')
+    const text = `${DEV}\nServer 84.12.3.4`
+    const out = await t.outbound(text, leaf)
+    expect(shape(out)).toBe(`${DEV}\nServer <CONTACT_IP>`)
+    expect(t.inbound(out)).toBe(text)
+  })
+
+  test('presets: [] in the config file turns the default off', async () => {
+    const t = await transform('protect:\n  presets: []\n')
+    const out = await t.outbound(DEV, leaf)
+    const lines = shape(out).split('\n')
+    expect(lines[0]).toBe('DIRECTUS_URL=<CONTACT_URL>')
+    expect(lines[1]).toStartWith('gutachten-webedit-directus\tdirectus/directus:11\t<CONTACT_IP>:8058->8055/tcp')
+    expect(t.inbound(out)).toBe(DEV)
+  })
+
+  test('protect.patterns from the config file are honored', async () => {
+    const t = await transform(String.raw`protect:
+  patterns: ['\b10\.0\.0\.5\b']
+`)
+    const text = 'intern 10.0.0.5, extern 84.12.3.4'
+    const out = await t.outbound(text, leaf)
+    expect(shape(out)).toBe('intern 10.0.0.5, extern <CONTACT_IP>')
+    expect(t.inbound(out)).toBe(text)
+  })
+})

@@ -56,6 +56,8 @@ export type {
 } from './detectors/llm.ts'
 
 export { BLOCK_ID_PATTERN, mergeSpans, overlaps, patternSpans, protectedSpans } from './markdown.ts'
+export { PRESET_PATTERNS, PROTECT_PRESETS, PROXY_DEFAULT_PRESETS, configProtect } from './protect.ts'
+export type { ProtectPreset } from './protect.ts'
 export type { Range } from './markdown.ts'
 export { FakeNames } from './fake-names.ts'
 export type { FakeNamesOptions, FakerLike } from './fake-names.ts'

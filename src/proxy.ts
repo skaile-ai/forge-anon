@@ -7,6 +7,7 @@ import type { Transform, TransformModule } from '@skaile/transform-proxy'
 import * as z from 'zod'
 import { loadConfig } from './config.ts'
 import { buildDetectors } from './pipeline.ts'
+import { PROXY_DEFAULT_PRESETS } from './protect.ts'
 import { ANON_SYSTEM, createAnonSession } from './session.ts'
 import { ENTITY_KINDS } from './types.ts'
 import type { EntityKind } from './types.ts'
@@ -34,10 +35,15 @@ const anon: TransformModule = {
       ...(parsed.data.config ? { path: path.resolve(baseDir, parsed.data.config) } : {})
     })
     // Built once per proxy: the ONNX pipeline is cached per detector instance.
-    const detectors = buildDetectors({ config, markdown })
+    // The proxy protects developer values (`dev` preset) unless the config names its own presets.
+    const effective =
+      config.protect.presets === undefined
+        ? { ...config, protect: { ...config.protect, presets: [...PROXY_DEFAULT_PRESETS] } }
+        : config
+    const detectors = buildDetectors({ config: effective, markdown })
 
     return async ({ facts }) => {
-      const session = createAnonSession({ config, detectors, markdown })
+      const session = createAnonSession({ config: effective, detectors, markdown })
       let seen = -1
       const transform: Transform = {
         instruction: ANON_SYSTEM,

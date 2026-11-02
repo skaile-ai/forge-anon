@@ -104,6 +104,39 @@ describe('loadConfig', () => {
     write(cwdCfg(), '')
     expect(load().sources).toEqual(['defaults', cwdCfg()])
   })
+
+  test('protect defaults: no patterns, no presets key', () => {
+    const { config } = load()
+    expect(config.protect).toEqual({ patterns: [] })
+    expect(Object.keys(config.protect)).toEqual(['patterns'])
+    expect(Object.keys(DEFAULT_CONFIG.protect)).toEqual(['patterns'])
+  })
+
+  test('protect.patterns: a pattern that does not compile names its index', () => {
+    const f = write(cwdCfg(), "protect:\n  patterns: ['\\bok\\b', '(']\n")
+    expect(() => load()).toThrow(`Konfiguration ungültig (${f})`)
+    expect(() => load()).toThrow(/protect\.patterns\.1: .*\(/)
+    write(cwdCfg(), "protect:\n  patterns: ['(']\n")
+    expect(() => load()).toThrow(/protect\.patterns\.0: /)
+  })
+
+  test('protect.patterns: valid sources are kept as strings', () => {
+    write(cwdCfg(), "protect:\n  patterns: ['\\bClaude\\b']\n")
+    expect(load().config.protect).toEqual({ patterns: ['\\bClaude\\b'] })
+  })
+
+  test('protect.presets: an unknown preset is rejected', () => {
+    const f = write(cwdCfg(), 'protect:\n  presets: [prod]\n')
+    expect(() => load()).toThrow(`Konfiguration ungültig (${f})`)
+    expect(() => load()).toThrow(/protect\.presets\.0/)
+  })
+
+  test('protect.presets: a higher layer with [] replaces a lower [dev]', () => {
+    write(homeCfg(), 'protect:\n  presets: [dev]\n')
+    expect(load().config.protect).toEqual({ patterns: [], presets: ['dev'] })
+    write(cwdCfg(), 'protect:\n  presets: []\n')
+    expect(load().config.protect).toEqual({ patterns: [], presets: [] })
+  })
 })
 
 describe('applyCliOverrides', () => {

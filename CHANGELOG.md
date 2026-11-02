@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0
+
+- New config key `protect`: `protect.patterns` lists regex sources (flag `u`) that are never anonymized; any detection overlapping a match is dropped for every detector. An invalid pattern or an unknown preset is a config error naming the index. Applies to the CLI, the library, `ai-sdk` and the proxy.
+- `protect.presets` adds built-in pattern sets. The `dev` preset protects loopback/unspecified IPs (`127.x.x.x`, `0.0.0.0`, `::1`, `[::]`) with optional port, `localhost` and `http(s)://` URLs on those hosts, docker/compose port maps (`0.0.0.0:8058->8055/tcp`) and container image references with a slash (`directus/directus:11`). Private ranges, public IPs, other domains, dates and emails stay anonymized. The CLI and library apply no preset unless configured.
+- `@skaile/forge-anon/proxy` applies `dev` when no config layer sets `protect.presets`. Before, developer tool output lost its technical values: `http://localhost:8058` became `<CONTACT_URL_…>`, `0.0.0.0:8058->8055/tcp` lost its host to `<CONTACT_IP_…>`, and ONNX cut port `8062` into `<CONTACT_IP_…>2`, so the agent guessed wrong ports.
+- Behaviour change for proxy users: localhost URLs, loopback IPs, port maps and image tags now reach the model verbatim. To get the old behaviour, set `protect: { presets: [] }`.
+- New exports `PROTECT_PRESETS`, `PRESET_PATTERNS`, `PROXY_DEFAULT_PRESETS`, `configProtect` and type `ProtectPreset`.
+
 ## 0.6.2
 
 - `@skaile/forge-anon/proxy`: a fact update that fails (a throwing `facts.list()` or a rejected `extend`) is retried on the next outbound text. Before, the facts version was marked as seen before the update ran, so the retry at the same version skipped it and could send the fact values in clear.

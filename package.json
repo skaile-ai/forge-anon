@@ -1,6 +1,6 @@
 {
   "name": "@skaile/forge-anon",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "type": "module",
   "description": "German clinical text anonymization: Stammdaten rules, regex, local ONNX NER, local LLM NER; reversible ledger; CLI",
   "license": "MIT",

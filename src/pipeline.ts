@@ -11,6 +11,7 @@ import { mergeSpans, overlaps, patternSpans, protectedSpans } from './markdown.t
 import type { Range } from './markdown.ts'
 import { getStyle } from './placeholders.ts'
 import { restore } from './restore.ts'
+import { configProtect } from './protect.ts'
 import type { PlaceholderStyle } from './placeholders.ts'
 import { addCandidate, buildRules, findRuleHits, residualScan } from './rules.ts'
 import type { Candidate } from './rules.ts'
@@ -23,7 +24,8 @@ export type AnonymizeOptions = {
   stammdaten?: Stammdaten
   markdown?: boolean
   /**
-   * Caller-defined protected patterns: every match is left verbatim by every detector (regex, onnx, llm, rules,
+   * Caller-defined protected patterns, applied after the config's `protect.patterns` and `protect.presets`: every
+   * match is left verbatim by every detector (regex, onnx, llm, rules,
    * manual, mapping), with or without `markdown`. A detection that overlaps a match is dropped. Patterns need no
    * `g` flag (it is added on a copy); empty matches are ignored. Use it for structural tokens such as ids.
    */
@@ -207,7 +209,7 @@ async function run(text: string, opts: AnonymizeOptions, style: PlaceholderStyle
 
   // Protection first: a span inside code or a protected pattern must not suppress a prose span.
   const markdownSpans: Range[] = (opts.markdown ?? false) && config.markdown.protect ? protectedSpans(text) : []
-  const protect = mergeSpans(markdownSpans, patternSpans(text, opts.protect ?? []))
+  const protect = mergeSpans(markdownSpans, patternSpans(text, [...configProtect(config), ...(opts.protect ?? [])]))
   const candidates = protect.length > 0 ? all.filter(s => !overlaps(s.start, s.end, protect)) : all
 
   // Review kinds are reported, not replaced. Explicit decisions (manual, rules) are never set aside.

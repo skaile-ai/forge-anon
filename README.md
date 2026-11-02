@@ -159,6 +159,7 @@ detectors:
 placeholders: { style: presidio, fakeNames: false }
 review: { kinds: [AGE, PROFESSION, OTHER] }  # detected, reported, not replaced
 markdown: { protect: true }
+protect: { patterns: [] }                # regex sources never anonymized; presets: [dev]
 ledger: { dir: ~/.local/share/forge-anon/ledgers, save: false }   # $ANON_LEDGER_DIR wins over dir
 ```
 
@@ -176,6 +177,32 @@ Random tokens differ on every run; the ledger is the only way back. Anonymizatio
 ### Entity kinds
 
 GeMTeX scheme: `NAME_PATIENT`, `NAME_RELATIVE`, `NAME_DOCTOR`, `NAME_EXT`, `NAME_TITLE`, `DATE_BIRTH`, `DATE_DEATH`, `DATE`, `AGE`, `LOCATION_STREET`, `LOCATION_CITY`, `LOCATION_ZIP`, `LOCATION_COUNTRY`, `LOCATION_STATE`, `LOCATION_HOSPITAL`, `LOCATION_ORGANIZATION`, `LOCATION_OTHER`, `ID`, `CONTACT_PHONE`, `CONTACT_EMAIL`, `CONTACT_FAX`, `CONTACT_URL`, `CONTACT_IP`, `PROFESSION`, `OTHER`.
+
+### Protected values
+
+`protect.patterns` lists JavaScript regex sources (no delimiters), compiled with flag `u`. Any detection that overlaps a match is dropped, for every detector (rules, regex, onnx, llm). A pattern that does not compile is a config error naming its index, e.g. `protect.patterns.0: …`.
+
+`protect.presets` adds built-in pattern sets. The only preset is `dev`: technical values that identify no person. It covers exactly:
+
+|Group|Example|
+|---|---|
+|Loopback / unspecified IPv4, optional port|`127.0.0.1:3025`, `0.0.0.0`|
+|IPv6 loopback / unspecified, optional port|`[::1]:8080`, `[::]:8058`|
+|`localhost` with optional port, and `http(s)://` URLs on `localhost`, `127.x.x.x`, `0.0.0.0` or `[::1]`|`http://localhost:8058/items?limit=1`|
+|Docker/compose port maps; a host part only if loopback/unspecified|`0.0.0.0:8058->8055/tcp`|
+|Container image references with at least one slash|`directus/directus:11`|
+
+`dev` deliberately does not cover private ranges (10.x, 172.16–31.x, 192.168.x), public IPs, other hostnames or domains, dates or emails: an internal address or hostname can identify a site, and with it a person. In `84.12.3.4:80->80/tcp` the ports pass and the IP is still anonymized.
+
+The CLI and the library apply no preset unless the config names one. The transform proxy applies `dev` when no config layer sets `presets`; `presets: []` turns it off. Arrays replace across layers, so the last layer that sets `presets` wins.
+
+Example per-project file for the proxy (`anon.config.yaml`):
+
+```yaml
+protect:
+  patterns: ['\bClaude\b', 'my-company\.internal']
+  presets: [dev]
+```
 
 ## Model choice (`onnx`)
 
@@ -332,6 +359,7 @@ defaultPipeline: default
 
 - `config` (optional): forge-anon config file, relative to the proxy `baseDir`. Without it the usual layers apply (`~/.config/forge-anon/config.yaml`, `<baseDir>/anon.config.yaml`, `$ANON_CONFIG`). `markdown` defaults to `true`. Unknown keys or wrong types make `open` throw.
 - The detectors are built once per proxy; each proxy session gets its own `AnonSession` and the `ANON_SYSTEM` instruction.
+- The proxy enables the `dev` preset by default (see [Protected values](#protected-values)), so developer tool output (ports, localhost URLs, docker port maps, image tags) reaches the model verbatim. Set `protect: { presets: [] }` to turn it off.
 - Session facts whose `kind` is an entity kind (`NAME_PATIENT`, `DATE_BIRTH`, ...) are added with `extend` before the next outbound text; other kinds are ignored. Facts that are removed later stay mapped, so placeholders already sent still restore.
 - Placeholders of the token styles contain no JSON escape characters, so the proxy can restore them inside streamed tool-call arguments.
 

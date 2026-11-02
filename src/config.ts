@@ -5,11 +5,20 @@ import { parse as parseYaml } from 'yaml'
 import { z } from 'zod'
 import { STYLE_NAMES } from './placeholders.ts'
 import { ENTITY_KINDS } from './types.ts'
+import { PROTECT_PRESETS } from './protect.ts'
 
 const EntityKindSchema = z.enum(ENTITY_KINDS)
 const StyleSchema = z.enum(STYLE_NAMES as [string, ...string[]]) as z.ZodType<(typeof STYLE_NAMES)[number]>
 
 const DETECTOR_NAMES = ['rules', 'regex', 'onnx', 'llm'] as const
+
+const ProtectPatternSchema = z.string().superRefine((s, ctx) => {
+  try {
+    new RegExp(s, 'u')
+  } catch (err) {
+    ctx.addIssue({ code: 'custom', message: `Ungültiges Muster ${JSON.stringify(s)}: ${(err as Error).message}` })
+  }
+})
 
 export const AnonConfigSchema = z.strictObject({
   detectors: z.strictObject({
@@ -40,6 +49,10 @@ export const AnonConfigSchema = z.strictObject({
   review: z.strictObject({ kinds: z.array(EntityKindSchema) }),
   markdown: z.strictObject({ protect: z.boolean() }),
   ledger: z.strictObject({ dir: z.string().min(1), save: z.boolean() }),
+  protect: z.strictObject({
+    patterns: z.array(ProtectPatternSchema),
+    presets: z.array(z.enum(PROTECT_PRESETS)).optional(),
+  }),
 })
 
 export type AnonConfig = z.infer<typeof AnonConfigSchema>
@@ -103,6 +116,7 @@ export const DEFAULT_CONFIG: AnonConfig = {
   review: { kinds: ['AGE', 'PROFESSION', 'OTHER'] },
   markdown: { protect: true },
   ledger: { dir: '~/.local/share/forge-anon/ledgers', save: false },
+  protect: { patterns: [] },
 }
 
 export function expandHome(p: string, home: string = os.homedir()): string {
