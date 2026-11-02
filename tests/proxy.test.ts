@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { SessionFact, SessionFacts, TransformFactory } from '@skaile/transform-proxy'
-import anon from '../src/proxy.ts'
+import anon, { type AnonProxyInspection } from '../src/proxy.ts'
 import { ANON_SYSTEM } from '../src/session.ts'
 import { ENTITY_KINDS } from '../src/types.ts'
 import { createStyle } from '../src/placeholders.ts'
@@ -57,7 +57,7 @@ describe('anon proxy transform module', () => {
   test('inspect returns the session entities for the host', async () => {
     const t = await (await openRegexOnly())({ sessionId: 's', facts: mutableFacts(), log })
     const out = await t.outbound('Rückruf unter 089 1234567', leaf)
-    const inspection = t.inspect?.() as { entities: { original: string; placeholder: string }[] } | undefined
+    const inspection = t.inspect?.() as AnonProxyInspection | undefined
     const entity = inspection?.entities.find(e => e.original === '089 1234567')
     expect(entity).toBeDefined()
     expect(out).toContain(entity!.placeholder)
