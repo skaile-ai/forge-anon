@@ -54,6 +54,15 @@ describe('anon proxy transform module', () => {
     expect(t.instruction).toBe(ANON_SYSTEM)
   })
 
+  test('inspect returns the session entities for the host', async () => {
+    const t = await (await openRegexOnly())({ sessionId: 's', facts: mutableFacts(), log })
+    const out = await t.outbound('Rückruf unter 089 1234567', leaf)
+    const inspection = t.inspect?.() as { entities: { original: string; placeholder: string }[] } | undefined
+    const entity = inspection?.entities.find(e => e.original === '089 1234567')
+    expect(entity).toBeDefined()
+    expect(out).toContain(entity!.placeholder)
+  })
+
   test('a fact published after creation is pseudonymized and restored', async () => {
     const facts = mutableFacts()
     const t = await (await openRegexOnly())({ sessionId: 's', facts, log })

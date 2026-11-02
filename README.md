@@ -362,6 +362,7 @@ defaultPipeline: default
 - The proxy enables the `dev` preset by default (see [Protected values](#protected-values)), so developer tool output (ports, localhost URLs, docker port maps, image tags) reaches the model verbatim. Set `protect: { presets: [] }` to turn it off.
 - Session facts whose `kind` is an entity kind (`NAME_PATIENT`, `DATE_BIRTH`, ...) are added with `extend` before the next outbound text; other kinds are ignored. Facts that are removed later stay mapped, so placeholders already sent still restore.
 - Placeholders of the token styles contain no JSON escape characters, so the proxy can restore them inside streamed tool-call arguments.
+- `inspect()` returns `{ entities }` for the host (`TransformProxy.inspect(sessionId)` → `{ anon: { entities } }`, type `AnonProxyInspection`). In-process only: it holds the originals and is never sent.
 
 ## Ledger
 

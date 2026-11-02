@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.0
+
+- `@skaile/forge-anon/proxy`: the anon transform implements `inspect()` (`@skaile/transform-proxy` 0.4.0) and returns `{ entities }`, a copy of the session mapping with originals. The host reads it with `TransformProxy.inspect(sessionId)` → `{ anon: { entities } }`; it stays in-process and is never sent. New exported type `AnonProxyInspection`.
+- devDependency `@skaile/transform-proxy` `^0.4.0`; the optional peer range `>=0.1.0 <1.0.0` is unchanged.
+
 ## 0.7.0
 
 - New config key `protect`: `protect.patterns` lists regex sources (flag `u`) that are never anonymized; any detection overlapping a match is dropped for every detector. An invalid pattern or an unknown preset is a config error naming the index. Applies to the CLI, the library, `ai-sdk` and the proxy.

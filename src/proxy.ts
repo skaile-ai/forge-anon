@@ -10,7 +10,12 @@ import { buildDetectors } from './pipeline.ts'
 import { PROXY_DEFAULT_PRESETS } from './protect.ts'
 import { ANON_SYSTEM, createAnonSession } from './session.ts'
 import { ENTITY_KINDS } from './types.ts'
-import type { EntityKind } from './types.ts'
+import type { Entity, EntityKind } from './types.ts'
+
+/** What `inspect()` of the anon transform returns to the host: the session mapping, originals included. Host-only. */
+export interface AnonProxyInspection {
+  entities: readonly Entity[]
+}
 
 const ProxyConfigSchema = z.strictObject({
   /**
@@ -63,7 +68,8 @@ const anon: TransformModule = {
         inboundStream() {
           const restorer = session.streamRestorer()
           return { push: chunk => restorer.push(chunk), flush: () => restorer.flush() }
-        }
+        },
+        inspect: (): AnonProxyInspection => ({ entities: [...session.entities] })
       }
       return transform
     }
