@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- New command `anon scan <paths...>`: walks files and directories and reports personal data per file without rewriting anything. Text, JSONL and CSV reports, `-l` for paths only, `-o` writes the report with mode 0600. Reads text files, HTML, PDF (`pdftotext`) and docx/odt/ods/pptx/xlsx (`unzip`); a missing tool skips the file. Exit 0 no PII, 2 PII, 1 errors.
+- New config section `scan` (`extensions`, `exclude`, `maxBytes`, `flagKinds`, `publicFilter`). Only kinds in `flagKinds` mark a file as containing PII; other findings are reported as context.
+- Optional public-figure filter (`--public-filter`, `scan.publicFilter`): the local LLM demotes detected names of public figures in their public role; it never adds findings.
+- Library: `createScanner`, `walkFiles`, `extractText`, `judgePublicNames`, `SkipFile` and their types.
+
 ## 0.9.0
 
 - `@skaile/forge-anon/proxy`: the anon transform implements `knownOriginals()` (`@skaile/transform-proxy` 0.5.0) and returns `{ kind, value }` for every original in the session mapping, detected or added from facts. The proxy's leak check uses them to warn when a value `anon` replaced in one place reaches the provider in clear elsewhere (e.g. in `tools`, or where the detector missed it in a new context). Without connectors, as in omp, the check had nothing to compare against. The check reports only kind and JSON path; the values stay in-process and are never sent.

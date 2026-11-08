@@ -53,6 +53,13 @@ export const AnonConfigSchema = z.strictObject({
     patterns: z.array(ProtectPatternSchema),
     presets: z.array(z.enum(PROTECT_PRESETS)).optional(),
   }),
+  scan: z.strictObject({
+    extensions: z.array(z.string().regex(/^[a-z0-9]+$/, 'Endung ohne Punkt, klein geschrieben')),
+    exclude: z.array(z.string().min(1)),
+    maxBytes: z.number().int().positive(),
+    flagKinds: z.array(EntityKindSchema),
+    publicFilter: z.boolean(),
+  }),
 })
 
 export type AnonConfig = z.infer<typeof AnonConfigSchema>
@@ -117,6 +124,19 @@ export const DEFAULT_CONFIG: AnonConfig = {
   markdown: { protect: true },
   ledger: { dir: '~/.local/share/forge-anon/ledgers', save: false },
   protect: { patterns: [] },
+  scan: {
+    extensions: [
+      'txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'jsonl', 'ndjson', 'xml', 'html', 'htm', 'eml', 'log',
+      'yaml', 'yml', 'tex', 'srt', 'vtt', 'pdf', 'docx', 'odt', 'xlsx', 'ods', 'pptx',
+    ],
+    exclude: ['.git', 'node_modules', '.venv', 'venv', '__pycache__', '.cache', '.Trash'],
+    maxBytes: 50_000_000,
+    flagKinds: [
+      'NAME_PATIENT', 'NAME_RELATIVE', 'NAME_DOCTOR', 'NAME_EXT', 'DATE_BIRTH', 'DATE_DEATH', 'LOCATION_STREET',
+      'ID', 'CONTACT_PHONE', 'CONTACT_EMAIL', 'CONTACT_FAX',
+    ],
+    publicFilter: false,
+  },
 }
 
 export function expandHome(p: string, home: string = os.homedir()): string {

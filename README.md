@@ -126,6 +126,41 @@ llm    enabled  url=http://127.0.0.1:8000/v1 reachable=yes
 
 `cache=missing` means the next run downloads the model; `packages missing` means `openmed` / `@huggingface/transformers` are not installed. LLM reachability is a `GET <baseUrl>/models` with a 3 s timeout.
 
+### `anon scan <paths...>`
+
+Walks files and directories and reports personal data per file. Read-only: nothing is rewritten, no ledger is written.
+
+```sh
+anon scan ~/Dokumente                      # text report of files with PII
+anon scan -l ./export                      # only the paths, like grep -l
+anon scan --format jsonl -o scan.jsonl .   # one JSON object per file, report file mode 0600
+anon scan --public-filter --llm-url http://127.0.0.1:11434/v1 --llm-model qwen3:8b ./news
+```
+
+```text
+● briefe/termin.txt  NAME_EXT 1, LOCATION_STREET 3, CONTACT_PHONE 1, CONTACT_EMAIL 1
+    NAME_EXT               "Petra Schneider"  Z. 1
+    CONTACT_PHONE          "0761 1234567"  Z. 3
+```
+
+|Option|Effect|
+|---|---|
+|`--format <text\|jsonl\|csv>`|`text` (default) lists files with PII; `jsonl` one object per file (also skipped/clean files); `csv` one row per finding|
+|`-o, --out <file>`|write the report there (mode 0600) instead of stdout; the summary stays on stderr|
+|`-l, --files-with-matches`|print only paths of files with PII|
+|`--ext <list>`|replace `scan.extensions`, e.g. `pdf,docx`|
+|`--public-filter` / `--no-public-filter`|ask the local LLM (`detectors.llm.baseUrl`/`model`) which detected person names are public figures in their public role; those become `public`|
+|`-v, --verbose`|also clean and skipped files, `context` and `public` findings|
+
+- **Levels.** A finding is `pii` when its kind is in `scan.flagKinds`, `context` otherwise (plain dates, cities, organisations, professions: alone they rarely identify anyone), `public` when the public-figure filter demotes a name. A file "has PII" when it has one `pii` finding.
+- **Public-figure filter.** Only demotes names the detectors found; names the model invents are ignored. A malformed model answer fails that file (exit 1) rather than passing names through. It is independent of the `llm` detector, which can stay off.
+- **Formats.** Plain text files are decoded as UTF-8, else Windows-1252; files with NUL bytes are skipped as binary. `.html` loses tags, scripts and styles. `.pdf` needs `pdftotext` (poppler), `.docx/.odt/.ods/.pptx/.xlsx` need `unzip`; a missing tool skips the file with a reason. Scanned PDFs without a text layer yield no findings (no OCR).
+- **Walking.** Paths given explicitly are always scanned; below directories only files with a `scan.extensions` extension, sorted by name. Symlinks are not followed; directories named in `scan.exclude` are skipped.
+- **Exit code.** 0 no PII, 2 PII found, 1 a file failed or bad arguments (errors win over PII).
+- Line numbers (`Z.`) refer to the extracted text; for plain text files that is the file itself.
+
+Detectors are built once per run, so the ONNX model loads once. Throughput on an Apple M5 Pro with the default `onnx` + `regex`: about 3 s for 9 small files, most of it model load.
+
 ## Configuration
 
 Layers, lowest first, deep-merged (objects merge; arrays and scalars replace): built-in defaults → `~/.config/forge-anon/config.yaml` → `./anon.config.yaml` → `--config <path>` / `$ANON_CONFIG` → CLI flags. A malformed file is an error naming the file. `~` expands to the home directory.
@@ -161,6 +196,14 @@ review: { kinds: [AGE, PROFESSION, OTHER] }  # detected, reported, not replaced
 markdown: { protect: true }
 protect: { patterns: [] }                # regex sources never anonymized; presets: [dev]
 ledger: { dir: ~/.local/share/forge-anon/ledgers, save: false }   # $ANON_LEDGER_DIR wins over dir
+scan:
+  extensions: [txt, md, markdown, csv, tsv, json, jsonl, ndjson, xml, html, htm, eml, log,
+               yaml, yml, tex, srt, vtt, pdf, docx, odt, xlsx, ods, pptx]
+  exclude: [.git, node_modules, .venv, venv, __pycache__, .cache, .Trash]   # directory names
+  maxBytes: 50000000                     # larger files are reported as skipped
+  flagKinds: [NAME_PATIENT, NAME_RELATIVE, NAME_DOCTOR, NAME_EXT, DATE_BIRTH, DATE_DEATH,
+              LOCATION_STREET, ID, CONTACT_PHONE, CONTACT_EMAIL, CONTACT_FAX]
+  publicFilter: false                    # true: local LLM demotes public figures
 ```
 
 ### Placeholder styles
