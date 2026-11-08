@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0
 
 - New command `anon scan <paths...>`: walks files and directories and reports personal data per file without rewriting anything. Text, JSONL and CSV reports, `-l` for paths only, `-o` writes the report with mode 0600. Reads text files, HTML, PDF (`pdftotext`) and docx/odt/ods/pptx/xlsx (`unzip`); a missing tool skips the file. Exit 0 no PII, 2 PII, 1 errors.
 - New config section `scan` (`extensions`, `exclude`, `maxBytes`, `flagKinds`, `publicFilter`). Only kinds in `flagKinds` mark a file as containing PII; other findings are reported as context.
