@@ -164,11 +164,16 @@ describe('profiles', () => {
     expect(load({ profile: '' }).config.profile).toBeUndefined()
   })
 
-  test('a profile wins over every file layer and merges deeply', () => {
-    write(cwdCfg(), 'detectors:\n  onnx:\n    variant: fp32\n    threshold: 0.5\n')
-    const c = load({ profile: 'fast' }).config
-    expect(c.detectors.onnx.variant).toBe('int8')
-    expect(c.detectors.onnx.threshold).toBe(0.5)
+  test('the profile sits above the home file and below project and explicit files', () => {
+    write(homeCfg(), 'profile: fast\ndetectors:\n  onnx:\n    variant: fp32\n    threshold: 0.5\n')
+    const home = load()
+    expect([home.config.detectors.onnx.variant, home.config.detectors.onnx.threshold]).toEqual(['int8', 0.5])
+    expect(home.sources).toEqual(['defaults', homeCfg(), 'profile:fast'])
+    // A project that switches ONNX off keeps it off whatever profile the user picked.
+    write(cwdCfg(), 'detectors:\n  onnx:\n    enabled: false\n')
+    const proj = load()
+    expect(proj.config.detectors.onnx.enabled).toBe(false)
+    expect(proj.sources).toEqual(['defaults', homeCfg(), 'profile:fast', cwdCfg()])
   })
 
   test('user profiles are added and built-ins can be tweaked from the home file', () => {

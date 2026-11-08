@@ -303,6 +303,7 @@ type ScanCliOpts = {
   ext?: string
   publicFilter?: boolean
   hidden?: boolean
+  maxChars?: string
   verbose?: boolean
 }
 
@@ -320,6 +321,7 @@ function scanTextReport(r: ScanFileResult, verbose: boolean): string[] {
   for (const f of r.findings) if (f.level === 'pii') counts.set(f.kind, (counts.get(f.kind) ?? 0) + 1)
   const summary = [...counts].map(([k, n]) => `${k} ${n}`).join(', ')
   const lines = [r.pii ? `● ${r.path}  ${summary}` : `○ ${r.path}  keine PII`]
+  if (r.scanned < r.chars) lines[0] += `  (erste ${r.scanned} von ${r.chars} Zeichen)`
   const distinct = new Map<string, { kind: string; text: string; level: string; lines: number[] }>()
   for (const f of shown) {
     const key = `${f.kind}\u0000${f.text}`
@@ -346,6 +348,7 @@ program
   .option('--public-filter', 'Personen des öffentlichen Lebens über das lokale LLM aussortieren (detectors.llm.baseUrl/model)')
   .option('--no-public-filter', 'Öffentlich-Filter abschalten')
   .option('--hidden', 'auch .dateien und .ordner durchsuchen (scan.hidden)')
+  .option('--max-chars <n>', 'nur die ersten n Zeichen je Datei prüfen, 0 = alle (scan.maxChars)')
   .option('-v, --verbose', 'auch Dateien ohne PII, übersprungene Dateien, Kontext- und öffentliche Funde zeigen')
   .action((paths: string[], opts: ScanCliOpts) =>
     guarded(async () => {
@@ -357,6 +360,11 @@ program
         config.scan.extensions = opts.ext.split(',').map(e => e.trim().replace(/^\./, '').toLowerCase()).filter(Boolean)
       }
       if (opts.hidden) config.scan.hidden = true
+      if (opts.maxChars !== undefined) {
+        const n = Number(opts.maxChars)
+        if (!Number.isInteger(n) || n < 0) throw new Error(`Ungültige Zeichenzahl: ${opts.maxChars}`)
+        config.scan.maxChars = n
+      }
       const llm = config.detectors.llm
       const usePublicFilter = opts.publicFilter ?? config.scan.publicFilter
       // Every file would fail one by one against a dead endpoint; fail once, up front.
@@ -400,15 +408,16 @@ program
       }
 
       const started = Date.now()
-      const tally = { files: 0, pii: 0, skipped: 0, errors: 0 }
+      const tally = { files: 0, pii: 0, skipped: 0, errors: 0, truncated: 0 }
       try {
         for await (const entry of walkFiles(paths, config.scan)) {
           progress(tally.files + 1, entry.path)
           const r: ScanFileResult = entry.skip
-            ? { path: entry.path, status: 'skipped', reason: entry.skip, chars: 0, pii: false, findings: [] }
+            ? { path: entry.path, status: 'skipped', reason: entry.skip, chars: 0, scanned: 0, pii: false, findings: [] }
             : await scanner.scanFile(entry.path)
           tally.files++
           if (r.pii) tally.pii++
+          if (r.scanned < r.chars) tally.truncated++
           if (r.status === 'skipped') tally.skipped++
           if (r.status === 'error') {
             tally.errors++
@@ -437,8 +446,9 @@ program
 
       const secs = ((Date.now() - started) / 1000).toFixed(1)
       const scanned = tally.files - tally.skipped - tally.errors
+      const cut = tally.truncated ? `, ${tally.truncated} nur bis scan.maxChars=${config.scan.maxChars} geprüft` : ''
       console.error(
-        `${tally.files} Dateien: ${tally.pii} mit PII, ${scanned - tally.pii} ohne, ${tally.skipped} übersprungen, ${tally.errors} Fehler (${secs} s)`,
+        `${tally.files} Dateien: ${tally.pii} mit PII, ${scanned - tally.pii} ohne, ${tally.skipped} übersprungen, ${tally.errors} Fehler${cut} (${secs} s)`,
       )
       return Math.max(tally.errors > 0 ? 1 : 0, tally.pii > 0 ? 2 : 0)
     }),

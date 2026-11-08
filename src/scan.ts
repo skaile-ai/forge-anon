@@ -49,6 +49,8 @@ export type ScanFileResult = {
   reason?: string
   /** Characters of extracted text. */
   chars: number
+  /** Characters scanned: `chars`, or less when `scan.maxChars` cut the text. */
+  scanned: number
   /** At least one finding with level `pii`. */
   pii: boolean
   findings: ScanFinding[]
@@ -320,19 +322,29 @@ export function createScanner(opts: ScanOptions): Scanner {
     }))
   }
 
+  /** First `max` characters, cut back to the last whitespace so no word is split. */
+  function head(text: string, max: number): string {
+    if (max <= 0 || text.length <= max) return text
+    const cut = text.slice(0, max)
+    const ws = cut.search(/\s\S*$/)
+    return ws > 0 ? cut.slice(0, ws) : cut
+  }
+
   async function scanFile(path: string): Promise<ScanFileResult> {
     let text: string
     try {
       text = await extractText(path)
     } catch (e) {
       const status = e instanceof SkipFile ? 'skipped' : 'error'
-      return { path, status, reason: (e as Error).message, chars: 0, pii: false, findings: [] }
+      return { path, status, reason: (e as Error).message, chars: 0, scanned: 0, pii: false, findings: [] }
     }
+    const part = head(text, config.scan.maxChars)
+    const base = { path, chars: text.length, scanned: part.length }
     try {
-      const findings = await scanText(text, config.markdown.protect && /^(md|markdown)$/.test(extOf(path)))
-      return { path, status: 'ok', chars: text.length, pii: findings.some(f => f.level === 'pii'), findings }
+      const findings = await scanText(part, config.markdown.protect && /^(md|markdown)$/.test(extOf(path)))
+      return { ...base, status: 'ok', pii: findings.some(f => f.level === 'pii'), findings }
     } catch (e) {
-      return { path, status: 'error', reason: (e as Error).message, chars: text.length, pii: false, findings: [] }
+      return { ...base, status: 'error', reason: (e as Error).message, pii: false, findings: [] }
     }
   }
 
