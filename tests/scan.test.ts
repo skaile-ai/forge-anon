@@ -165,6 +165,16 @@ describe('walkFiles', () => {
     expect((await paths([join(tmp, 'a/.obsidian')])).map(e => e.path)).toEqual(['a/.obsidian/n.md'])
   })
 
+  test('empty files and Office lock files are skipped with a reason', async () => {
+    mkdirSync(join(tmp, 'b'))
+    writeFileSync(join(tmp, 'b/leer.docx'), '')
+    writeFileSync(join(tmp, 'b/~$brief.docx'), 'x')
+    expect(await paths([join(tmp, 'b')])).toEqual([
+      { path: 'b/leer.docx', skip: 'leere Datei' },
+      { path: 'b/~$brief.docx', skip: 'Office-Sperrdatei' },
+    ])
+  })
+
   test('explicit files bypass the extension filter; missing paths are reported', async () => {
     const r = await paths([join(tmp, 'a/bild.png'), join(tmp, 'fehlt.txt')])
     expect(r[0]).toEqual({ path: 'a/bild.png' })

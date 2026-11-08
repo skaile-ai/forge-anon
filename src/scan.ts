@@ -13,7 +13,7 @@
 
 import { execFile } from 'node:child_process'
 import { lstat, readFile, readdir } from 'node:fs/promises'
-import { extname, join } from 'node:path'
+import { basename, extname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { z } from 'zod'
 import type { AnonConfig } from './config.ts'
@@ -45,6 +45,10 @@ const PII_SHAPE: Partial<Record<EntityKind, (text: string) => boolean>> = {
   DATE_DEATH: t => count(t, /\d/g) >= 6,
   LOCATION_STREET: t => count(t, /\p{L}/gu) >= 3,
   CONTACT_EMAIL: t => t.includes('@'),
+  NAME_PATIENT: t => count(t, /\p{L}/gu) >= 2,
+  NAME_RELATIVE: t => count(t, /\p{L}/gu) >= 2,
+  NAME_DOCTOR: t => count(t, /\p{L}/gu) >= 2,
+  NAME_EXT: t => count(t, /\p{L}/gu) >= 2,
 }
 
 export type ScanFinding = {
@@ -92,8 +96,8 @@ export type WalkEntry = { path: string; skip?: string }
 /**
  * Files below `roots` (files given directly are always yielded), depth first, sorted by name.
  * Symlinks are not followed. Directories named in `exclude` are skipped, and with `hidden: false` every
- * dot-entry below a root; files whose extension is not in `extensions` are not yielded at all; files above
- * `maxBytes` are yielded with a skip reason.
+ * dot-entry below a root; files whose extension is not in `extensions` are not yielded at all; empty files,
+ * Office lock files (`~$name.docx`) and files above `maxBytes` are yielded with a skip reason.
  */
 export async function* walkFiles(
   roots: readonly string[],
@@ -130,6 +134,14 @@ export async function* walkFiles(
     }
     if (!st.isFile()) return
     if (!explicit && !exts.has(extOf(path))) return
+    if (st.size === 0) {
+      yield { path, skip: 'leere Datei' }
+      return
+    }
+    if (basename(path).startsWith('~$')) {
+      yield { path, skip: 'Office-Sperrdatei' }
+      return
+    }
     if (st.size > scan.maxBytes) {
       yield { path, skip: `größer als scan.maxBytes (${st.size} > ${scan.maxBytes} Bytes)` }
       return
