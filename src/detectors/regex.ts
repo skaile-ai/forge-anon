@@ -104,6 +104,14 @@ function urlRanges(masked: string): Range[] {
   })
 }
 
+/** A phone label right before a number (`Tel.:`, `Fax`, `Mobil`, `Handy`, `Rufnummer`, `Durchwahl` …). */
+const PHONE_LABEL = /(?:Tel(?:efon)?|Fon|Fax|Mobil(?:funk)?|Handy|Rufnummer|Durchwahl|Telefonnummer)\.?\s*(?:\(\w+\)\s*)?:?\s*$/iu
+
+/**
+ * libphonenumber (region DE) also accepts local numbers without area code, which in running text are mostly
+ * amounts (`150.000`, `1.211,87`) or ranges (`27.000–93.000`, `2015–2025`). A number counts only when it is
+ * written like a phone number (`+…` or an area code: trunk `0` plus at least two digits) or follows a phone label.
+ */
 function phoneSpans(masked: string, suppress: Range[]): { start: number; end: number; fax: boolean }[] {
   const out: { start: number; end: number; fax: boolean }[] = []
   for (const f of findPhoneNumbersInText(masked, 'DE')) {
@@ -111,8 +119,9 @@ function phoneSpans(masked: string, suppress: Range[]): { start: number; end: nu
     if (!text.includes('+') && (text.match(/\d/g)?.length ?? 0) < 6) continue
     if (/^\d+(?:\.\d+){2,}$/.test(text)) continue // dotted numbers: invalid IPs, versions, dates
     if (suppress.some(([s, e]) => f.startsAt < e && s < f.endsAt)) continue
-    const context = masked.slice(Math.max(0, f.startsAt - 12), f.startsAt)
-    out.push({ start: f.startsAt, end: f.endsAt, fax: /fax/i.test(context) })
+    const context = masked.slice(Math.max(0, f.startsAt - 24), f.startsAt)
+    if (!/^\(?(?:\+|0\d\d)/.test(text) && !PHONE_LABEL.test(context)) continue
+    out.push({ start: f.startsAt, end: f.endsAt, fax: /fax/i.test(context.slice(-12)) })
   }
   return out
 }

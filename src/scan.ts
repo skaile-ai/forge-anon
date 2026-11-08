@@ -26,8 +26,26 @@ import type { DetectorName, EntityKind, Span } from './types.ts'
 
 export type ScanConfig = AnonConfig['scan']
 
-/** `pii`: kind in `scan.flagKinds`; `context`: other kinds; `public`: a person name judged a public figure. */
+/**
+ * `pii`: kind in `scan.flagKinds` whose text has the shape of that kind (see `PII_SHAPE`); `context`: other
+ * kinds and misshapen ones; `public`: a person name judged a public figure.
+ */
 export type FindingLevel = 'pii' | 'context' | 'public'
+
+const count = (s: string, re: RegExp) => s.match(re)?.length ?? 0
+
+/**
+ * Minimal shape per kind. Out of its clinical domain (tables, prices, plans) the ONNX model tags bare numbers
+ * as ID (`20`), street (`B`, `140`) or birth date (`27`, `2025`) and word fragments as email (`pkv`); such text
+ * identifies nobody.
+ */
+const PII_SHAPE: Partial<Record<EntityKind, (text: string) => boolean>> = {
+  ID: t => count(t, /[\p{L}\p{N}]/gu) >= 5,
+  DATE_BIRTH: t => count(t, /\d/g) >= 6,
+  DATE_DEATH: t => count(t, /\d/g) >= 6,
+  LOCATION_STREET: t => count(t, /\p{L}/gu) >= 3,
+  CONTACT_EMAIL: t => t.includes('@'),
+}
 
 export type ScanFinding = {
   kind: EntityKind
@@ -313,13 +331,19 @@ export function createScanner(opts: ScanOptions): Scanner {
     return spans.map(s => ({
       kind: s.kind,
       text: s.text,
-      level: publicNames.has(s.text) && kindGroup(s.kind) === 'NAME' ? 'public' : flag.has(s.kind) ? 'pii' : 'context',
+      level: levelOf(s, publicNames),
       line: lineOf(starts, s.start),
       start: s.start,
       end: s.end,
       detector: s.detector,
       score: s.score,
     }))
+  }
+
+  function levelOf(s: Span, publicNames: ReadonlySet<string>): FindingLevel {
+    if (publicNames.has(s.text) && kindGroup(s.kind) === 'NAME') return 'public'
+    if (!flag.has(s.kind)) return 'context'
+    return PII_SHAPE[s.kind]?.(s.text) === false ? 'context' : 'pii'
   }
 
   /** First `max` characters, cut back to the last whitespace so no word is split. */

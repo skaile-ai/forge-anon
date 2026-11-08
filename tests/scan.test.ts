@@ -68,6 +68,27 @@ describe('scanText levels', () => {
     ])
   })
 
+  test('misshapen IDs, birth dates and streets are context, well-formed ones pii', async () => {
+    const needles: { text: string; kind: EntityKind }[] = [
+      { text: '2026', kind: 'ID' },
+      { text: 'A123456789', kind: 'ID' },
+      { text: '27', kind: 'DATE_BIRTH' },
+      { text: '15.03.1976', kind: 'DATE_BIRTH' },
+      { text: '140', kind: 'LOCATION_STREET' },
+      { text: 'Lindenstraße 14', kind: 'LOCATION_STREET' },
+    ]
+    const s = createScanner({ config: config(), detectors: [fake(needles)] })
+    const f = await s.scanText('Tarif 2026, Nr. A123456789, Alter 27, geb. 15.03.1976, Zeile 140, Lindenstraße 14.')
+    expect(f.map(x => [x.text, x.level])).toEqual([
+      ['2026', 'context'],
+      ['A123456789', 'pii'],
+      ['27', 'context'],
+      ['15.03.1976', 'pii'],
+      ['140', 'context'],
+      ['Lindenstraße 14', 'pii'],
+    ])
+  })
+
   test('public filter demotes only names the model lists that were detected', async () => {
     const prompts: string[] = []
     const chat: NerChat = async p => {

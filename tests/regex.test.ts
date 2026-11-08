@@ -42,6 +42,14 @@ describe('phone and fax', () => {
     expect(found(spans, 'CONTACT_PHONE')).toEqual([])
     expect(found(spans, 'CONTACT_FAX')).toEqual([])
   })
+
+  test('amounts and ranges are not phone numbers; a local number counts only after a phone label', async () => {
+    const spans = await run(
+      'Beitrag 1.211,87 € bei 150.000 € Einkommen, Spanne 27.000–93.000, Jahre 2015–2025, Gruppe 100-80-60, ' +
+        'Alter 0–14 / 15–19. Durchwahl: 2345678, Telefonnummer 7654321.'
+    )
+    expect(found(spans, 'CONTACT_PHONE')).toEqual(['2345678', '7654321'])
+  })
 })
 
 describe('IBAN and KVNR', () => {
