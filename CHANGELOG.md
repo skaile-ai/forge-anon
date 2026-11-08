@@ -9,6 +9,8 @@
 - Profiles: named partial configs under `profiles`, layered above `~/.config/forge-anon/config.yaml` and below `./anon.config.yaml`, `--config` and CLI flags; selected by `--profile`, `$ANON_PROFILE` or the `profile` key. Built in: `fast` (regex + ONNX int8, first 10 000 characters per file, no LLM) and `good` (regex + ONNX fp16, whole files, public-figure filter with Ollama `qwen3:8b`). New command `anon profiles`; `anon config --init` writes `~/.config/forge-anon/config.yaml` with both profiles and home-directory excludes. Library: `homeConfigPath`, `HOME_CONFIG_TEMPLATE`.
 - `scan.maxChars` (default `0` = all, flag `--max-chars`): only the first n characters of each file's text are checked; results carry `scanned` next to `chars`, the summary counts cut files.
 - `scan.hidden` (default `false`, flag `--hidden`): dot-entries below the scan roots are skipped. Default `scan.exclude` now also has `dist`, `build`, `target`. A scan with the public filter or the `llm` detector checks the endpoint once before the first file. Interactive terminals show a progress line.
+- Regex phone detection: a number without `+` or area code (`0` plus two digits) counts only after a phone label (`Tel`, `Fax`, `Mobil`, `Handy`, `Rufnummer`, `Durchwahl`). Amounts (`150.000`, `1.211,87`) and ranges (`27.000–93.000`, `2015–2025`) were reported as phone numbers; in a health-insurance comparison all 133 regex phone hits were such numbers.
+- `anon scan`: a flagged finding without the shape of its kind is `context`, not `pii`: an `ID` needs 5 letters or digits, `DATE_BIRTH`/`DATE_DEATH` 6 digits, `LOCATION_STREET` 3 letters, `CONTACT_EMAIL` an `@`. Out of its clinical domain the ONNX model tags bare numbers (`20`, `2025`, `B`) and word fragments (`pkv`) as such.
 
 ## 0.9.0
 
