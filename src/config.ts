@@ -20,6 +20,8 @@ const ProtectPatternSchema = z.string().superRefine((s, ctx) => {
   }
 })
 
+const PROFILE_NAME = /^[a-z0-9][a-z0-9_-]*$/
+
 export const AnonConfigSchema = z.strictObject({
   detectors: z.strictObject({
     rules: z.strictObject({ enabled: z.boolean() }),
@@ -56,10 +58,15 @@ export const AnonConfigSchema = z.strictObject({
   scan: z.strictObject({
     extensions: z.array(z.string().regex(/^[a-z0-9]+$/, 'Endung ohne Punkt, klein geschrieben')),
     exclude: z.array(z.string().min(1)),
+    hidden: z.boolean(),
     maxBytes: z.number().int().positive(),
     flagKinds: z.array(EntityKindSchema),
     publicFilter: z.boolean(),
   }),
+  /** Profile applied on top of the config files (`--profile` and `$ANON_PROFILE` win). */
+  profile: z.string().regex(PROFILE_NAME).optional(),
+  /** Named partial configs; `description` is shown by `anon profiles` and not merged. */
+  profiles: z.record(z.string().regex(PROFILE_NAME, 'Profilname: a-z, 0-9, - und _'), z.record(z.string(), z.unknown())),
 })
 
 export type AnonConfig = z.infer<typeof AnonConfigSchema>
@@ -129,13 +136,32 @@ export const DEFAULT_CONFIG: AnonConfig = {
       'txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'jsonl', 'ndjson', 'xml', 'html', 'htm', 'eml', 'log',
       'yaml', 'yml', 'tex', 'srt', 'vtt', 'pdf', 'docx', 'odt', 'xlsx', 'ods', 'pptx',
     ],
-    exclude: ['.git', 'node_modules', '.venv', 'venv', '__pycache__', '.cache', '.Trash'],
+    exclude: ['.git', 'node_modules', '.venv', 'venv', '__pycache__', 'dist', 'build', 'target'],
+    hidden: false,
     maxBytes: 50_000_000,
     flagKinds: [
       'NAME_PATIENT', 'NAME_RELATIVE', 'NAME_DOCTOR', 'NAME_EXT', 'DATE_BIRTH', 'DATE_DEATH', 'LOCATION_STREET',
       'ID', 'CONTACT_PHONE', 'CONTACT_EMAIL', 'CONTACT_FAX',
     ],
     publicFilter: false,
+  },
+  // Measured choices, see README "Profiles": `fast` takes the int8 weights (GraSCCo regex+onnx recall 82.7 %,
+  // corpus 10 s vs 15 s) and no LLM; `good` takes fp16 (onnx recall 81.3 vs 78.6 %) and the public-figure
+  // filter with qwen3:8b, the smallest model that kept Scholz/Macron apart from private persons (qwen3:4b did not).
+  profiles: {
+    fast: {
+      description: 'regex + ONNX int8, kein LLM: ganze Verzeichnisbäume',
+      detectors: { onnx: { enabled: true, variant: 'int8' }, llm: { enabled: false } },
+      scan: { publicFilter: false },
+    },
+    good: {
+      description: 'regex + ONNX fp16 + Öffentlich-Filter (Ollama qwen3:8b): gezielte Ordner',
+      detectors: {
+        onnx: { enabled: true, variant: 'fp16' },
+        llm: { enabled: false, baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen3:8b' },
+      },
+      scan: { publicFilter: true },
+    },
   },
 }
 
@@ -201,12 +227,65 @@ function expandPaths(config: AnonConfig, home: string): AnonConfig {
 
 export type LoadConfigOptions = {
   path?: string
+  /** Profile name; wins over `$ANON_PROFILE` and the `profile` key. Empty string: no profile. */
+  profile?: string
   cwd?: string
   env?: NodeJS.ProcessEnv
   home?: string
 }
 
-/** Layers, lowest first: defaults → `<home>/.config/forge-anon/config.yaml` → `<cwd>/anon.config.yaml` → explicit path / `ANON_CONFIG`. */
+export function homeConfigPath(home: string = os.homedir()): string {
+  return path.join(home, '.config', 'forge-anon', 'config.yaml')
+}
+
+/** Written by `anon config --init`: selects `fast` and spells out both profiles so they can be edited in place. */
+export const HOME_CONFIG_TEMPLATE = `# forge-anon: Einstellungen für alle Aufrufe dieses Benutzers.
+# Schichten: Standardwerte → diese Datei → ./anon.config.yaml → --config → Profil → CLI-Optionen.
+# Profil wählen: hier \`profile:\`, oder ANON_PROFILE=good, oder anon --profile good …
+# Wirksame Konfiguration: anon config   Profile: anon profiles
+
+profile: fast
+
+scan:
+  # Verzeichnisnamen, die nirgends betreten werden (ersetzt die Standardliste).
+  exclude: [.git, node_modules, .venv, venv, __pycache__, dist, build, target,
+            Library, Applications, Movies, Music, Pictures, Public]
+  hidden: false          # .dateien und .ordner unterhalb der Startpfade überspringen
+
+profiles:
+  fast:
+    description: "regex + ONNX int8, kein LLM: ganze Verzeichnisbäume"
+    detectors:
+      onnx: { enabled: true, variant: int8 }
+      llm: { enabled: false }
+    scan: { publicFilter: false }
+  good:
+    description: "regex + ONNX fp16 + Öffentlich-Filter (Ollama qwen3:8b): gezielte Ordner"
+    detectors:
+      onnx: { enabled: true, variant: fp16 }
+      llm: { enabled: false, baseUrl: "http://127.0.0.1:11434/v1", model: "qwen3:8b" }
+    scan: { publicFilter: true }
+`
+
+/**
+ * Merges profile `name` onto `config`. A profile is a partial config; it may not select or define profiles,
+ * and its `description` is not merged.
+ */
+export function applyProfile(config: AnonConfig, name: string): AnonConfig {
+  const body = config.profiles[name]
+  if (!body) {
+    const known = Object.keys(config.profiles)
+    throw new Error(`Unbekanntes Profil: ${name}. Vorhanden: ${known.length ? known.join(', ') : '(keine)'}`)
+  }
+  const { description: _description, ...rest } = body
+  if ('profile' in rest || 'profiles' in rest) throw new Error(`Profil "${name}" darf profile/profiles nicht setzen`)
+  return validate({ ...(deepMerge(config, rest) as AnonConfig), profile: name }, `Profil "${name}"`)
+}
+
+/**
+ * Layers, lowest first: defaults → `<home>/.config/forge-anon/config.yaml` → `<cwd>/anon.config.yaml` →
+ * explicit path / `ANON_CONFIG` → the selected profile (`opts.profile` → `$ANON_PROFILE` → `profile` key).
+ */
 export function loadConfig(opts: LoadConfigOptions = {}): { config: AnonConfig; sources: string[] } {
   const home = opts.home ?? os.homedir()
   const cwd = opts.cwd ?? process.cwd()
@@ -215,7 +294,7 @@ export function loadConfig(opts: LoadConfigOptions = {}): { config: AnonConfig; 
   const explicit = explicitRaw ? path.resolve(cwd, expandHome(explicitRaw, home)) : undefined
 
   const candidates: { file: string; required: boolean }[] = [
-    { file: path.join(home, '.config', 'forge-anon', 'config.yaml'), required: false },
+    { file: homeConfigPath(home), required: false },
     { file: path.join(cwd, 'anon.config.yaml'), required: false },
   ]
   if (explicit) candidates.push({ file: explicit, required: true })
@@ -231,7 +310,15 @@ export function loadConfig(opts: LoadConfigOptions = {}): { config: AnonConfig; 
     merged = validate(deepMerge(merged, readLayer(file)), file)
     sources.push(file)
   }
-  return { config: expandPaths(validate(merged, 'defaults'), home), sources }
+  let config = validate(merged, 'defaults')
+  const profile = opts.profile ?? env.ANON_PROFILE ?? config.profile
+  if (profile) {
+    config = applyProfile(config, profile)
+    sources.push(`profile:${profile}`)
+  } else {
+    delete config.profile
+  }
+  return { config: expandPaths(config, home), sources }
 }
 
 export type CliFlags = {

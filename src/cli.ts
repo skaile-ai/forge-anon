@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// `anon` command line: anonymize / deanonymize / inspect / config / scan / detectors.
+// `anon` command line: anonymize / deanonymize / inspect / config / profiles / scan / detectors.
 
-import { chmodSync, closeSync, existsSync, openSync, readFileSync, writeFileSync, writeSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import { Command } from 'commander'
 import { stringify } from 'yaml'
-import { applyCliOverrides, expandHome, loadConfig } from './config.ts'
+import { HOME_CONFIG_TEMPLATE, applyCliOverrides, expandHome, homeConfigPath, loadConfig } from './config.ts'
 import type { AnonConfig, CliFlags } from './config.ts'
 import { assertLocalUrl, openAiCompatibleChat } from './detectors/llm.ts'
 import type { NerChat } from './detectors/llm.ts'
@@ -21,7 +21,7 @@ import type { Stammdaten } from './types.ts'
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
 
-type GlobalOpts = CliFlags & { config?: string }
+type GlobalOpts = CliFlags & { config?: string; profile?: string }
 
 const program = new Command()
 
@@ -30,6 +30,7 @@ program
   .description('Deutsche klinische Texte reversibel anonymisieren (Stammdaten-Regeln, Regex, lokales ONNX-NER, lokales LLM-NER)')
   .version(pkg.version)
   .option('--config <path>', 'Konfigurationsdatei (überschreibt ~/.config/forge-anon/config.yaml und ./anon.config.yaml)')
+  .option('--profile <name>', 'Profil aus profiles anwenden (überschreibt ANON_PROFILE und profile; "" = keins)')
   .option('--detectors <list>', 'Detektoren, kommagetrennt aus rules,regex,onnx,llm (setzt enabled exakt)')
   .option('--no-regex', 'Regex-Detektor abschalten')
   .option('--no-onnx', 'ONNX-Detektor abschalten')
@@ -65,8 +66,8 @@ async function guarded(fn: () => Promise<number | void> | number | void): Promis
 
 /** Config with file layers and CLI flags applied. */
 function effectiveConfig(): { config: AnonConfig; sources: string[] } {
-  const { config: configPath, ...flags } = program.opts<GlobalOpts>()
-  const loaded = loadConfig({ path: configPath })
+  const { config: configPath, profile, ...flags } = program.opts<GlobalOpts>()
+  const loaded = loadConfig({ path: configPath, profile })
   return { config: applyCliOverrides(loaded.config, flags), sources: loaded.sources }
 }
 
@@ -254,12 +255,40 @@ program
 
 program
   .command('config')
-  .description('Wirksame Konfiguration als YAML ausgeben')
-  .action(() =>
+  .description('Wirksame Konfiguration als YAML ausgeben; --init legt ~/.config/forge-anon/config.yaml an')
+  .option('--init', 'Benutzerkonfiguration mit den Profilen fast und good anlegen')
+  .option('--force', 'mit --init: vorhandene Datei überschreiben')
+  .action((opts: { init?: boolean; force?: boolean }) =>
     guarded(() => {
+      if (opts.init) {
+        const file = homeConfigPath()
+        if (existsSync(file) && !opts.force) throw new Error(`${file} existiert bereits (--force überschreibt)`)
+        mkdirSync(dirname(file), { recursive: true })
+        writeFileSync(file, HOME_CONFIG_TEMPLATE, 'utf8')
+        console.log(`angelegt: ${file}`)
+        return
+      }
       const { config, sources } = effectiveConfig()
       console.log(`# sources: ${sources.join(', ')}`)
       process.stdout.write(stringify(config, { lineWidth: 0 }))
+    }),
+  )
+
+// ---- profiles -------------------------------------------------------------------------------
+
+program
+  .command('profiles')
+  .description('Profile auflisten; * markiert das aktive')
+  .action(() =>
+    guarded(() => {
+      const { config } = effectiveConfig()
+      const names = Object.keys(config.profiles)
+      if (names.length === 0) console.log('(keine Profile)')
+      const width = Math.max(...names.map(n => n.length))
+      for (const n of names) {
+        const desc = config.profiles[n]?.description
+        console.log(`${n === config.profile ? '*' : ' '} ${n.padEnd(width)}  ${typeof desc === 'string' ? desc : ''}`.trimEnd())
+      }
     }),
   )
 
@@ -273,6 +302,7 @@ type ScanCliOpts = {
   filesWithMatches?: boolean
   ext?: string
   publicFilter?: boolean
+  hidden?: boolean
   verbose?: boolean
 }
 
@@ -315,6 +345,7 @@ program
   .option('--ext <list>', 'Dateiendungen, kommagetrennt, ohne Punkt (ersetzt scan.extensions)')
   .option('--public-filter', 'Personen des öffentlichen Lebens über das lokale LLM aussortieren (detectors.llm.baseUrl/model)')
   .option('--no-public-filter', 'Öffentlich-Filter abschalten')
+  .option('--hidden', 'auch .dateien und .ordner durchsuchen (scan.hidden)')
   .option('-v, --verbose', 'auch Dateien ohne PII, übersprungene Dateien, Kontext- und öffentliche Funde zeigen')
   .action((paths: string[], opts: ScanCliOpts) =>
     guarded(async () => {
@@ -325,15 +356,45 @@ program
       if (opts.ext !== undefined) {
         config.scan.extensions = opts.ext.split(',').map(e => e.trim().replace(/^\./, '').toLowerCase()).filter(Boolean)
       }
+      if (opts.hidden) config.scan.hidden = true
       const llm = config.detectors.llm
-      const publicFilter = (opts.publicFilter ?? config.scan.publicFilter)
+      const usePublicFilter = opts.publicFilter ?? config.scan.publicFilter
+      // Every file would fail one by one against a dead endpoint; fail once, up front.
+      if (usePublicFilter || llm.enabled) {
+        const state = await llmReachable(llm.baseUrl, process.env[llm.apiKeyEnv])
+        if (state !== 'yes') {
+          throw new Error(`LLM ${llm.baseUrl} (${llm.model}) nicht erreichbar${state === 'unauthorized' ? `: API-Key fehlt oder falsch ($${llm.apiKeyEnv})` : ''}; Server starten, --no-public-filter/--no-llm oder --profile fast`)
+        }
+      }
+      const publicFilter = usePublicFilter
         ? openAiCompatibleChat({ baseUrl: llm.baseUrl, model: llm.model, apiKey: process.env[llm.apiKeyEnv], timeoutMs: llm.timeoutMs })
         : undefined
       const scanner = createScanner({ config, chat: buildChat(config), publicFilter })
 
+      // Progress line on an interactive stderr only; cleared before anything else is printed to the terminal.
+      const tty = Boolean(process.stderr.isTTY)
+      let shown = false
+      let lastProgress = 0
+      const clearProgress = () => {
+        if (shown) process.stderr.write('\r\x1b[K')
+        shown = false
+      }
+      const progress = (n: number, path: string) => {
+        const now = Date.now()
+        if (!tty || now - lastProgress < 200) return
+        lastProgress = now
+        const width = (process.stderr.columns ?? 100) - 12
+        const p = path.length > width ? `…${path.slice(-(width - 1))}` : path
+        process.stderr.write(`\r\x1b[K[${n}] ${p}`)
+        shown = true
+      }
+
       const fd = opts.out ? openSync(opts.out, 'w', 0o600) : 1
       if (opts.out) chmodSync(opts.out, 0o600)
-      const emit = (line: string) => writeSync(fd, `${line}\n`)
+      const emit = (line: string) => {
+        if (fd === 1) clearProgress()
+        writeSync(fd, `${line}\n`)
+      }
       if (opts.format === 'csv' && !opts.filesWithMatches) {
         emit('path,status,reason,kind,level,text,line,start,end,detector,score')
       }
@@ -342,6 +403,7 @@ program
       const tally = { files: 0, pii: 0, skipped: 0, errors: 0 }
       try {
         for await (const entry of walkFiles(paths, config.scan)) {
+          progress(tally.files + 1, entry.path)
           const r: ScanFileResult = entry.skip
             ? { path: entry.path, status: 'skipped', reason: entry.skip, chars: 0, pii: false, findings: [] }
             : await scanner.scanFile(entry.path)
@@ -350,6 +412,7 @@ program
           if (r.status === 'skipped') tally.skipped++
           if (r.status === 'error') {
             tally.errors++
+            clearProgress()
             console.error(`✗ ${r.path}: ${r.reason}`)
           }
 
@@ -369,6 +432,7 @@ program
         }
       } finally {
         if (opts.out) closeSync(fd)
+        clearProgress()
       }
 
       const secs = ((Date.now() - started) / 1000).toFixed(1)

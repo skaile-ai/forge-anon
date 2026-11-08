@@ -47,6 +47,7 @@ anon [global options] <command>
 |Option|Effect|
 |---|---|
 |`--config <path>`|extra config file (highest file layer; also `ANON_CONFIG`)|
+|`--profile <name>`|apply a profile (see Profiles); wins over `$ANON_PROFILE` and the `profile` key; `--profile ''` selects none|
 |`--detectors <list>`|comma list from `rules,regex,onnx,llm`; enables exactly these|
 |`--no-regex` `--no-onnx` `--no-llm`|switch one detector off|
 |`--onnx-model <id>`|Hugging Face model id|
@@ -113,7 +114,13 @@ Prints the ledger header (`key`, `source`, `created`, `style`, `fake_names`, `de
 
 ### `anon config`
 
-Prints the effective configuration (files plus flags) as YAML, preceded by `# sources: defaults, …`.
+Prints the effective configuration (files, profile, flags) as YAML, preceded by `# sources: defaults, …, profile:<name>`.
+
+`anon config --init` writes `~/.config/forge-anon/config.yaml` with `profile: fast`, both profiles spelled out for editing, and home-directory excludes (`Library`, `Applications`, `Movies`, `Music`, `Pictures`, `Public`). An existing file is kept unless `--force`.
+
+### `anon profiles`
+
+Lists the profiles with their `description`; `*` marks the active one.
 
 ### `anon detectors`
 
@@ -150,12 +157,14 @@ anon scan --public-filter --llm-url http://127.0.0.1:11434/v1 --llm-model qwen3:
 |`-l, --files-with-matches`|print only paths of files with PII|
 |`--ext <list>`|replace `scan.extensions`, e.g. `pdf,docx`|
 |`--public-filter` / `--no-public-filter`|ask the local LLM (`detectors.llm.baseUrl`/`model`) which detected person names are public figures in their public role; those become `public`|
+|`--hidden`|also enter dot-files and dot-directories below the roots (`scan.hidden`)|
 |`-v, --verbose`|also clean and skipped files, `context` and `public` findings|
 
 - **Levels.** A finding is `pii` when its kind is in `scan.flagKinds`, `context` otherwise (plain dates, cities, organisations, professions: alone they rarely identify anyone), `public` when the public-figure filter demotes a name. A file "has PII" when it has one `pii` finding.
-- **Public-figure filter.** Only demotes names the detectors found; names the model invents are ignored. A malformed model answer fails that file (exit 1) rather than passing names through. It is independent of the `llm` detector, which can stay off.
+- **Public-figure filter.** Only demotes names the detectors found; names the model invents are ignored. A malformed model answer fails that file (exit 1) rather than passing names through. It is independent of the `llm` detector, which can stay off. When the filter or the `llm` detector is on, the endpoint is checked once before the first file; unreachable exits 1.
 - **Formats.** Plain text files are decoded as UTF-8, else Windows-1252; files with NUL bytes are skipped as binary. `.html` loses tags, scripts and styles. `.pdf` needs `pdftotext` (poppler), `.docx/.odt/.ods/.pptx/.xlsx` need `unzip`; a missing tool skips the file with a reason. Scanned PDFs without a text layer yield no findings (no OCR).
-- **Walking.** Paths given explicitly are always scanned; below directories only files with a `scan.extensions` extension, sorted by name. Symlinks are not followed; directories named in `scan.exclude` are skipped.
+- **Walking.** Paths given explicitly are always scanned, excluded or hidden or not; below them only files with a `scan.extensions` extension, sorted by name. Symlinks are not followed; directories named in `scan.exclude` and, unless `scan.hidden`, dot-entries are skipped.
+- **Progress.** On an interactive terminal stderr shows `[n] <path>`; it is cleared before report lines and errors.
 - **Exit code.** 0 no PII, 2 PII found, 1 a file failed or bad arguments (errors win over PII).
 - Line numbers (`Z.`) refer to the extracted text; for plain text files that is the file itself.
 
@@ -163,7 +172,7 @@ Detectors are built once per run, so the ONNX model loads once. Throughput on an
 
 ## Configuration
 
-Layers, lowest first, deep-merged (objects merge; arrays and scalars replace): built-in defaults → `~/.config/forge-anon/config.yaml` → `./anon.config.yaml` → `--config <path>` / `$ANON_CONFIG` → CLI flags. A malformed file is an error naming the file. `~` expands to the home directory.
+Layers, lowest first, deep-merged (objects merge; arrays and scalars replace): built-in defaults → `~/.config/forge-anon/config.yaml` → `./anon.config.yaml` → `--config <path>` / `$ANON_CONFIG` → the selected profile → CLI flags. A malformed file is an error naming the file. `~` expands to the home directory. `anon config --init` creates the home file.
 
 ```yaml
 detectors:
@@ -199,12 +208,28 @@ ledger: { dir: ~/.local/share/forge-anon/ledgers, save: false }   # $ANON_LEDGER
 scan:
   extensions: [txt, md, markdown, csv, tsv, json, jsonl, ndjson, xml, html, htm, eml, log,
                yaml, yml, tex, srt, vtt, pdf, docx, odt, xlsx, ods, pptx]
-  exclude: [.git, node_modules, .venv, venv, __pycache__, .cache, .Trash]   # directory names
+  exclude: [.git, node_modules, .venv, venv, __pycache__, dist, build, target]   # directory names
+  hidden: false                          # false: skip dot-entries below the roots
   maxBytes: 50000000                     # larger files are reported as skipped
   flagKinds: [NAME_PATIENT, NAME_RELATIVE, NAME_DOCTOR, NAME_EXT, DATE_BIRTH, DATE_DEATH,
               LOCATION_STREET, ID, CONTACT_PHONE, CONTACT_EMAIL, CONTACT_FAX]
   publicFilter: false                    # true: local LLM demotes public figures
+# profile: fast                          # unset by default; $ANON_PROFILE and --profile win
+profiles: { fast: {…}, good: {…} }       # built in, see Profiles
 ```
+
+### Profiles
+
+A profile is a named partial config under `profiles`, merged on top of all config files and below CLI flags. Select one with `--profile`, `$ANON_PROFILE` or the `profile` key, in that order. A profile may not set `profile` or `profiles`; its `description` is shown by `anon profiles` and not merged. Home or project files can add profiles or change the built-in ones key by key (`profiles.good.detectors.llm.model: gemma3:12b`).
+
+Built in, chosen from the measurements in Model choice and Evaluation and from a public-figure test with Ollama on an M5 Pro:
+
+|Profile|Detectors|Public-figure filter|Why|
+|---|---|---|---|
+|`fast`|regex + `onnx` Small-44M **int8**|off|regex+onnx recall 82.7 % on GraSCCo; int8 takes 10 s for the corpus vs 15 s for fp16. For whole directory trees.|
+|`good`|regex + `onnx` Small-44M **fp16**|on, Ollama `qwen3:8b` at `http://127.0.0.1:11434/v1`|fp16: onnx recall 81.3 vs 78.6 %; Base/Large models are not better and 2-5× slower. `qwen3:8b` (≈1 s per call) kept Olaf Scholz/Emmanuel Macron apart from private persons; `qwen3:4b` listed them as private. Needs `ollama serve` and `ollama pull qwen3:8b`.|
+
+Neither profile turns on the `llm` detector: with the 26B model from Evaluation it adds 2 points of recall (84.7 %) for one model call per 3000-character chunk.
 
 ### Placeholder styles
 

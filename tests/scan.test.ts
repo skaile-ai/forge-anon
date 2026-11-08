@@ -120,6 +120,15 @@ describe('walkFiles', () => {
     ])
   })
 
+  test('dot-entries below a root are skipped unless hidden; an explicit dot-root is scanned', async () => {
+    mkdirSync(join(tmp, 'a/.obsidian'))
+    writeFileSync(join(tmp, 'a/.obsidian/n.md'), 'x')
+    writeFileSync(join(tmp, 'a/.notiz.txt'), 'x')
+    expect((await paths([join(tmp, 'a')])).map(e => e.path)).not.toContain('a/.notiz.txt')
+    expect((await paths([join(tmp, 'a')], { hidden: true })).map(e => e.path)).toContain('a/.obsidian/n.md')
+    expect((await paths([join(tmp, 'a/.obsidian')])).map(e => e.path)).toEqual(['a/.obsidian/n.md'])
+  })
+
   test('explicit files bypass the extension filter; missing paths are reported', async () => {
     const r = await paths([join(tmp, 'a/bild.png'), join(tmp, 'fehlt.txt')])
     expect(r[0]).toEqual({ path: 'a/bild.png' })
@@ -188,6 +197,13 @@ describe('anon scan CLI', () => {
     const rows = r.out.trim().split('\n')
     expect(rows[0]).toStartWith('path,status,reason,kind,level,text,line')
     expect(rows[1]).toStartWith('mit.txt,ok,,CONTACT_EMAIL,pii,anna.mueller@example.de,1,')
+  })
+
+  test('an unreachable LLM fails once up front when the public filter is on', () => {
+    const r = run(['--public-filter', '--llm-url', 'http://127.0.0.1:9/v1', '.'])
+    expect(r.code).toBe(1)
+    expect(r.err).toContain('nicht erreichbar')
+    expect(r.out).toBe('')
   })
 
   test('an unknown format exits 1', () => {

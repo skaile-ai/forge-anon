@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { DEFAULT_CONFIG, applyCliOverrides, loadConfig } from '../src/config.ts'
+import { DEFAULT_CONFIG, HOME_CONFIG_TEMPLATE, applyCliOverrides, loadConfig } from '../src/config.ts'
 
 let root: string
 let home: string
@@ -15,7 +15,7 @@ function write(file: string, content: string): string {
 }
 const homeCfg = () => path.join(home, '.config', 'forge-anon', 'config.yaml')
 const cwdCfg = () => path.join(cwd, 'anon.config.yaml')
-const load = (extra: { path?: string; env?: NodeJS.ProcessEnv } = {}) =>
+const load = (extra: { path?: string; profile?: string; env?: NodeJS.ProcessEnv } = {}) =>
   loadConfig({ home, cwd, env: {}, ...extra })
 
 beforeEach(() => {
@@ -136,6 +136,60 @@ describe('loadConfig', () => {
     expect(load().config.protect).toEqual({ patterns: [], presets: ['dev'] })
     write(cwdCfg(), 'protect:\n  presets: []\n')
     expect(load().config.protect).toEqual({ patterns: [], presets: [] })
+  })
+})
+
+describe('profiles', () => {
+  test('no profile selected: plain defaults, no profile key', () => {
+    const { config, sources } = load()
+    expect(config.profile).toBeUndefined()
+    expect(config.detectors.onnx.variant).toBe('fp16')
+    expect(sources).toEqual(['defaults'])
+  })
+
+  test('built-in fast and good differ as measured', () => {
+    const fast = load({ profile: 'fast' }).config
+    expect([fast.detectors.onnx.variant, fast.scan.publicFilter, fast.detectors.llm.enabled]).toEqual(['int8', false, false])
+    const good = load({ profile: 'good' })
+    expect([good.config.detectors.onnx.variant, good.config.scan.publicFilter, good.config.detectors.llm.model]).toEqual(['fp16', true, 'qwen3:8b'])
+    expect(good.config.profile).toBe('good')
+    expect(good.sources.at(-1)).toBe('profile:good')
+  })
+
+  test('precedence: option > ANON_PROFILE > profile key; "" selects none', () => {
+    write(homeCfg(), 'profile: good\n')
+    expect(load().config.profile).toBe('good')
+    expect(load({ env: { ANON_PROFILE: 'fast' } }).config.profile).toBe('fast')
+    expect(load({ env: { ANON_PROFILE: 'fast' }, profile: 'good' }).config.profile).toBe('good')
+    expect(load({ profile: '' }).config.profile).toBeUndefined()
+  })
+
+  test('a profile wins over every file layer and merges deeply', () => {
+    write(cwdCfg(), 'detectors:\n  onnx:\n    variant: fp32\n    threshold: 0.5\n')
+    const c = load({ profile: 'fast' }).config
+    expect(c.detectors.onnx.variant).toBe('int8')
+    expect(c.detectors.onnx.threshold).toBe(0.5)
+  })
+
+  test('user profiles are added and built-ins can be tweaked from the home file', () => {
+    write(homeCfg(), 'profiles:\n  strict:\n    description: x\n    scan: { flagKinds: [ID] }\n  good:\n    detectors: { llm: { model: gemma3:12b } }\n')
+    expect(load({ profile: 'strict' }).config.scan.flagKinds).toEqual(['ID'])
+    const good = load({ profile: 'good' }).config
+    expect([good.detectors.llm.model, good.scan.publicFilter]).toEqual(['gemma3:12b', true])
+  })
+
+  test('unknown profile lists the known ones; invalid profile bodies name the profile', () => {
+    expect(() => load({ profile: 'nope' })).toThrow('Unbekanntes Profil: nope. Vorhanden: fast, good')
+    write(homeCfg(), 'profiles:\n  bad:\n    detectors: { onnx: { variant: int4 } }\n  loop:\n    profile: fast\n')
+    expect(() => load({ profile: 'bad' })).toThrow('Profil "bad"')
+    expect(() => load({ profile: 'loop' })).toThrow('darf profile/profiles nicht setzen')
+  })
+
+  test('the home template loads and selects fast', () => {
+    write(homeCfg(), HOME_CONFIG_TEMPLATE)
+    const { config } = load()
+    expect(config.profile).toBe('fast')
+    expect(config.scan.exclude).toContain('Library')
   })
 })
 
