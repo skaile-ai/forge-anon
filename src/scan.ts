@@ -71,10 +71,14 @@ export type WalkEntry = { path: string; skip?: string }
 
 /**
  * Files below `roots` (files given directly are always yielded), depth first, sorted by name.
- * Symlinks are not followed. Directories named in `exclude` are skipped; files whose extension is not in
- * `extensions` are not yielded at all; files above `maxBytes` are yielded with a skip reason.
+ * Symlinks are not followed. Directories named in `exclude` are skipped, and with `hidden: false` every
+ * dot-entry below a root; files whose extension is not in `extensions` are not yielded at all; files above
+ * `maxBytes` are yielded with a skip reason.
  */
-export async function* walkFiles(roots: readonly string[], scan: Pick<ScanConfig, 'extensions' | 'exclude' | 'maxBytes'>): AsyncGenerator<WalkEntry> {
+export async function* walkFiles(
+  roots: readonly string[],
+  scan: Pick<ScanConfig, 'extensions' | 'exclude' | 'hidden' | 'maxBytes'>,
+): AsyncGenerator<WalkEntry> {
   const exts = new Set(scan.extensions)
   const exclude = new Set(scan.exclude)
 
@@ -99,7 +103,7 @@ export async function* walkFiles(roots: readonly string[], scan: Pick<ScanConfig
         return
       }
       for (const name of names) {
-        if (exclude.has(name)) continue
+        if (exclude.has(name) || (!scan.hidden && name.startsWith('.'))) continue
         yield* visit(join(path, name), false)
       }
       return

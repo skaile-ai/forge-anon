@@ -72,7 +72,7 @@ export {
 } from './ledger.ts'
 export type { Ledger, SaveLedgerInput } from './ledger.ts'
 
-export { AnonConfigSchema, DEFAULT_CONFIG, applyCliOverrides, expandHome, loadConfig } from './config.ts'
+export { AnonConfigSchema, DEFAULT_CONFIG, HOME_CONFIG_TEMPLATE, applyCliOverrides, applyProfile, expandHome, homeConfigPath, loadConfig } from './config.ts'
 export type { AnonConfig, CliFlags, LoadConfigOptions } from './config.ts'
 
 export { findRuleHits } from './rules.ts'
