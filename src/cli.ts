@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// `anon` command line: anonymize / deanonymize / inspect / config / detectors.
+// `anon` command line: anonymize / deanonymize / inspect / config / scan / detectors.
 
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, openSync, readFileSync, writeFileSync, writeSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import { Command } from 'commander'
 import { stringify } from 'yaml'
@@ -14,6 +14,8 @@ import type { OnnxVariant } from './detectors/onnx.ts'
 import { KEY_RE, findLedger, ledgerPath, readLedger, saveLedger, sha256, storeDir } from './ledger.ts'
 import type { Ledger } from './ledger.ts'
 import { anonymize } from './pipeline.ts'
+import { createScanner, walkFiles } from './scan.ts'
+import type { ScanFileResult } from './scan.ts'
 import { restore } from './restore.ts'
 import type { Stammdaten } from './types.ts'
 
@@ -258,6 +260,123 @@ program
       const { config, sources } = effectiveConfig()
       console.log(`# sources: ${sources.join(', ')}`)
       process.stdout.write(stringify(config, { lineWidth: 0 }))
+    }),
+  )
+
+// ---- scan -----------------------------------------------------------------------------------
+
+const SCAN_FORMATS = ['text', 'jsonl', 'csv'] as const
+
+type ScanCliOpts = {
+  format: string
+  out?: string
+  filesWithMatches?: boolean
+  ext?: string
+  publicFilter?: boolean
+  verbose?: boolean
+}
+
+const csvCell = (v: unknown): string => {
+  const s = v === undefined ? '' : String(v)
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+
+/** Text report of one file: kinds with counts, then each distinct finding with its lines. */
+function scanTextReport(r: ScanFileResult, verbose: boolean): string[] {
+  if (r.status !== 'ok') return verbose && r.status === 'skipped' ? [`- ${r.path}: übersprungen (${r.reason})`] : []
+  const shown = r.findings.filter(f => verbose || f.level === 'pii')
+  if (!r.pii && !verbose) return []
+  const counts = new Map<string, number>()
+  for (const f of r.findings) if (f.level === 'pii') counts.set(f.kind, (counts.get(f.kind) ?? 0) + 1)
+  const summary = [...counts].map(([k, n]) => `${k} ${n}`).join(', ')
+  const lines = [r.pii ? `● ${r.path}  ${summary}` : `○ ${r.path}  keine PII`]
+  const distinct = new Map<string, { kind: string; text: string; level: string; lines: number[] }>()
+  for (const f of shown) {
+    const key = `${f.kind}\u0000${f.text}`
+    const d = distinct.get(key) ?? { kind: f.kind, text: f.text, level: f.level, lines: [] }
+    if (!d.lines.includes(f.line)) d.lines.push(f.line)
+    distinct.set(key, d)
+  }
+  for (const d of distinct.values()) {
+    const tag = d.level === 'pii' ? '' : `  [${d.level === 'public' ? 'öffentlich' : 'Kontext'}]`
+    const at = d.lines.length > 5 ? `${d.lines.slice(0, 5).join(', ')} …` : d.lines.join(', ')
+    lines.push(`    ${d.kind.padEnd(22)} ${JSON.stringify(d.text.replace(/\s+/g, ' '))}  Z. ${at}${tag}`)
+  }
+  return lines
+}
+
+program
+  .command('scan')
+  .description('Dateien und Verzeichnisse rekursiv nach personenbezogenen Daten durchsuchen (nur Bericht, ändert nichts)')
+  .argument('<paths...>', 'Dateien oder Verzeichnisse')
+  .option('--format <format>', `Ausgabe: ${SCAN_FORMATS.join('|')}`, 'text')
+  .option('-o, --out <file>', 'Bericht in diese Datei schreiben (Modus 0600) statt auf stdout')
+  .option('-l, --files-with-matches', 'nur die Pfade der Dateien mit PII ausgeben')
+  .option('--ext <list>', 'Dateiendungen, kommagetrennt, ohne Punkt (ersetzt scan.extensions)')
+  .option('--public-filter', 'Personen des öffentlichen Lebens über das lokale LLM aussortieren (detectors.llm.baseUrl/model)')
+  .option('--no-public-filter', 'Öffentlich-Filter abschalten')
+  .option('-v, --verbose', 'auch Dateien ohne PII, übersprungene Dateien, Kontext- und öffentliche Funde zeigen')
+  .action((paths: string[], opts: ScanCliOpts) =>
+    guarded(async () => {
+      if (!(SCAN_FORMATS as readonly string[]).includes(opts.format)) {
+        throw new Error(`Unbekanntes Format: ${opts.format}. Erlaubt: ${SCAN_FORMATS.join(', ')}`)
+      }
+      const { config } = effectiveConfig()
+      if (opts.ext !== undefined) {
+        config.scan.extensions = opts.ext.split(',').map(e => e.trim().replace(/^\./, '').toLowerCase()).filter(Boolean)
+      }
+      const llm = config.detectors.llm
+      const publicFilter = (opts.publicFilter ?? config.scan.publicFilter)
+        ? openAiCompatibleChat({ baseUrl: llm.baseUrl, model: llm.model, apiKey: process.env[llm.apiKeyEnv], timeoutMs: llm.timeoutMs })
+        : undefined
+      const scanner = createScanner({ config, chat: buildChat(config), publicFilter })
+
+      const fd = opts.out ? openSync(opts.out, 'w', 0o600) : 1
+      if (opts.out) chmodSync(opts.out, 0o600)
+      const emit = (line: string) => writeSync(fd, `${line}\n`)
+      if (opts.format === 'csv' && !opts.filesWithMatches) {
+        emit('path,status,reason,kind,level,text,line,start,end,detector,score')
+      }
+
+      const started = Date.now()
+      const tally = { files: 0, pii: 0, skipped: 0, errors: 0 }
+      try {
+        for await (const entry of walkFiles(paths, config.scan)) {
+          const r: ScanFileResult = entry.skip
+            ? { path: entry.path, status: 'skipped', reason: entry.skip, chars: 0, pii: false, findings: [] }
+            : await scanner.scanFile(entry.path)
+          tally.files++
+          if (r.pii) tally.pii++
+          if (r.status === 'skipped') tally.skipped++
+          if (r.status === 'error') {
+            tally.errors++
+            console.error(`✗ ${r.path}: ${r.reason}`)
+          }
+
+          if (opts.filesWithMatches) {
+            if (r.pii) emit(r.path)
+          } else if (opts.format === 'jsonl') {
+            emit(JSON.stringify(r))
+          } else if (opts.format === 'csv') {
+            const head = [r.path, r.status, r.reason]
+            if (r.findings.length === 0) emit([...head, '', '', '', '', '', '', '', ''].map(csvCell).join(','))
+            for (const f of r.findings) {
+              emit([...head, f.kind, f.level, f.text, f.line, f.start, f.end, f.detector, f.score.toFixed(2)].map(csvCell).join(','))
+            }
+          } else {
+            for (const line of scanTextReport(r, Boolean(opts.verbose))) emit(line)
+          }
+        }
+      } finally {
+        if (opts.out) closeSync(fd)
+      }
+
+      const secs = ((Date.now() - started) / 1000).toFixed(1)
+      const scanned = tally.files - tally.skipped - tally.errors
+      console.error(
+        `${tally.files} Dateien: ${tally.pii} mit PII, ${scanned - tally.pii} ohne, ${tally.skipped} übersprungen, ${tally.errors} Fehler (${secs} s)`,
+      )
+      return Math.max(tally.errors > 0 ? 1 : 0, tally.pii > 0 ? 2 : 0)
     }),
   )
 
