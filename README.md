@@ -158,6 +158,7 @@ anon scan --public-filter --llm-url http://127.0.0.1:11434/v1 --llm-model qwen3:
 |`--ext <list>`|replace `scan.extensions`, e.g. `pdf,docx`|
 |`--public-filter` / `--no-public-filter`|ask the local LLM (`detectors.llm.baseUrl`/`model`) which detected person names are public figures in their public role; those become `public`|
 |`--hidden`|also enter dot-files and dot-directories below the roots (`scan.hidden`)|
+|`--max-chars <n>`|check only the first n characters of each file's text, cut at whitespace; `0` = all (`scan.maxChars`). The text report marks cut files `(erste n von m Zeichen)`, JSONL has `chars` and `scanned`, the summary counts them|
 |`-v, --verbose`|also clean and skipped files, `context` and `public` findings|
 
 - **Levels.** A finding is `pii` when its kind is in `scan.flagKinds`, `context` otherwise (plain dates, cities, organisations, professions: alone they rarely identify anyone), `public` when the public-figure filter demotes a name. A file "has PII" when it has one `pii` finding.
@@ -172,7 +173,7 @@ Detectors are built once per run, so the ONNX model loads once. Throughput on an
 
 ## Configuration
 
-Layers, lowest first, deep-merged (objects merge; arrays and scalars replace): built-in defaults → `~/.config/forge-anon/config.yaml` → `./anon.config.yaml` → `--config <path>` / `$ANON_CONFIG` → the selected profile → CLI flags. A malformed file is an error naming the file. `~` expands to the home directory. `anon config --init` creates the home file.
+Layers, lowest first, deep-merged (objects merge; arrays and scalars replace): built-in defaults → `~/.config/forge-anon/config.yaml` → the selected profile → `./anon.config.yaml` → `--config <path>` / `$ANON_CONFIG` → CLI flags. The profile is a user-level preset, so project and explicit files still win over it. A malformed file is an error naming the file. `~` expands to the home directory. `anon config --init` creates the home file.
 
 ```yaml
 detectors:
@@ -211,6 +212,7 @@ scan:
   exclude: [.git, node_modules, .venv, venv, __pycache__, dist, build, target]   # directory names
   hidden: false                          # false: skip dot-entries below the roots
   maxBytes: 50000000                     # larger files are reported as skipped
+  maxChars: 0                            # >0: check only the first n characters of each file
   flagKinds: [NAME_PATIENT, NAME_RELATIVE, NAME_DOCTOR, NAME_EXT, DATE_BIRTH, DATE_DEATH,
               LOCATION_STREET, ID, CONTACT_PHONE, CONTACT_EMAIL, CONTACT_FAX]
   publicFilter: false                    # true: local LLM demotes public figures
@@ -220,14 +222,14 @@ profiles: { fast: {…}, good: {…} }       # built in, see Profiles
 
 ### Profiles
 
-A profile is a named partial config under `profiles`, merged on top of all config files and below CLI flags. Select one with `--profile`, `$ANON_PROFILE` or the `profile` key, in that order. A profile may not set `profile` or `profiles`; its `description` is shown by `anon profiles` and not merged. Home or project files can add profiles or change the built-in ones key by key (`profiles.good.detectors.llm.model: gemma3:12b`).
+A profile is a named partial config under `profiles`, merged on top of the home file and below project files, `--config` and CLI flags. Select one with `--profile`, `$ANON_PROFILE` or the `profile` key, in that order. A profile may not set `profile` or `profiles`; its `description` is shown by `anon profiles` and not merged. Any file can add profiles or change the built-in ones key by key (`profiles.good.detectors.llm.model: gemma3:12b`).
 
 Built in, chosen from the measurements in Model choice and Evaluation and from a public-figure test with Ollama on an M5 Pro:
 
 |Profile|Detectors|Public-figure filter|Why|
 |---|---|---|---|
-|`fast`|regex + `onnx` Small-44M **int8**|off|regex+onnx recall 82.7 % on GraSCCo; int8 takes 10 s for the corpus vs 15 s for fp16. For whole directory trees.|
-|`good`|regex + `onnx` Small-44M **fp16**|on, Ollama `qwen3:8b` at `http://127.0.0.1:11434/v1`|fp16: onnx recall 81.3 vs 78.6 %; Base/Large models are not better and 2-5× slower. `qwen3:8b` (≈1 s per call) kept Olaf Scholz/Emmanuel Macron apart from private persons; `qwen3:4b` listed them as private. Needs `ollama serve` and `ollama pull qwen3:8b`.|
+|`fast`|regex + `onnx` Small-44M **int8**, first 10 000 characters per file|off|regex+onnx recall 82.7 % on GraSCCo; int8 takes 10 s for the corpus vs 15 s for fp16. ONNX on CPU manages about 5 KB/s on a loaded M5 Pro, and a home directory holds ~6000 such files (1.2 GB of PDF, 42 MB of Markdown): uncapped that is many hours, capped at 10 000 characters about 27 MB. For whole directory trees.|
+|`good`|regex + `onnx` Small-44M **fp16**, whole files|on, Ollama `qwen3:8b` at `http://127.0.0.1:11434/v1`|fp16: onnx recall 81.3 vs 78.6 %; Base/Large models are not better and 2-5× slower. `qwen3:8b` (≈1 s per call) kept Olaf Scholz/Emmanuel Macron apart from private persons; `qwen3:4b` listed them as private. Needs `ollama serve` and `ollama pull qwen3:8b`. For targeted folders.|
 
 Neither profile turns on the `llm` detector: with the 26B model from Evaluation it adds 2 points of recall (84.7 %) for one model call per 3000-character chunk.
 

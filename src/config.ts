@@ -60,6 +60,8 @@ export const AnonConfigSchema = z.strictObject({
     exclude: z.array(z.string().min(1)),
     hidden: z.boolean(),
     maxBytes: z.number().int().positive(),
+    /** Scan only the first N characters of each file's text; 0 = all. */
+    maxChars: z.number().int().min(0),
     flagKinds: z.array(EntityKindSchema),
     publicFilter: z.boolean(),
   }),
@@ -139,28 +141,31 @@ export const DEFAULT_CONFIG: AnonConfig = {
     exclude: ['.git', 'node_modules', '.venv', 'venv', '__pycache__', 'dist', 'build', 'target'],
     hidden: false,
     maxBytes: 50_000_000,
+    maxChars: 0,
     flagKinds: [
       'NAME_PATIENT', 'NAME_RELATIVE', 'NAME_DOCTOR', 'NAME_EXT', 'DATE_BIRTH', 'DATE_DEATH', 'LOCATION_STREET',
       'ID', 'CONTACT_PHONE', 'CONTACT_EMAIL', 'CONTACT_FAX',
     ],
     publicFilter: false,
   },
-  // Measured choices, see README "Profiles": `fast` takes the int8 weights (GraSCCo regex+onnx recall 82.7 %,
-  // corpus 10 s vs 15 s) and no LLM; `good` takes fp16 (onnx recall 81.3 vs 78.6 %) and the public-figure
-  // filter with qwen3:8b, the smallest model that kept Scholz/Macron apart from private persons (qwen3:4b did not).
+  // Measured choices, see README "Profiles". ONNX on CPU runs about 5 (int8) and 2.6 (fp16) chunks of 900
+  // characters per second on a loaded M5 Pro, so a home directory (~6000 files, 42 MB of Markdown alone) takes hours
+  // in full. `fast` takes int8 (GraSCCo regex+onnx recall 82.7 %) and the first 10 000 characters of each
+  // file; `good` takes fp16 (onnx recall 81.3 vs 78.6 %), whole files and the public-figure filter with
+  // qwen3:8b, the smallest model that kept Scholz/Macron apart from private persons (qwen3:4b did not).
   profiles: {
     fast: {
-      description: 'regex + ONNX int8, kein LLM: ganze Verzeichnisbäume',
+      description: 'regex + ONNX int8, erste 10 000 Zeichen je Datei, kein LLM: ganze Verzeichnisbäume',
       detectors: { onnx: { enabled: true, variant: 'int8' }, llm: { enabled: false } },
-      scan: { publicFilter: false },
+      scan: { publicFilter: false, maxChars: 10_000 },
     },
     good: {
-      description: 'regex + ONNX fp16 + Öffentlich-Filter (Ollama qwen3:8b): gezielte Ordner',
+      description: 'regex + ONNX fp16, ganze Dateien, Öffentlich-Filter (Ollama qwen3:8b): gezielte Ordner',
       detectors: {
         onnx: { enabled: true, variant: 'fp16' },
         llm: { enabled: false, baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen3:8b' },
       },
-      scan: { publicFilter: true },
+      scan: { publicFilter: true, maxChars: 0 },
     },
   },
 }
@@ -254,37 +259,36 @@ scan:
 
 profiles:
   fast:
-    description: "regex + ONNX int8, kein LLM: ganze Verzeichnisbäume"
+    description: "regex + ONNX int8, erste 10 000 Zeichen je Datei, kein LLM: ganze Verzeichnisbäume"
     detectors:
       onnx: { enabled: true, variant: int8 }
       llm: { enabled: false }
-    scan: { publicFilter: false }
+    scan: { publicFilter: false, maxChars: 10000 }
   good:
-    description: "regex + ONNX fp16 + Öffentlich-Filter (Ollama qwen3:8b): gezielte Ordner"
+    description: "regex + ONNX fp16, ganze Dateien, Öffentlich-Filter (Ollama qwen3:8b): gezielte Ordner"
     detectors:
       onnx: { enabled: true, variant: fp16 }
       llm: { enabled: false, baseUrl: "http://127.0.0.1:11434/v1", model: "qwen3:8b" }
-    scan: { publicFilter: true }
+    scan: { publicFilter: true, maxChars: 0 }
 `
 
-/**
- * Merges profile `name` onto `config`. A profile is a partial config; it may not select or define profiles,
- * and its `description` is not merged.
- */
-export function applyProfile(config: AnonConfig, name: string): AnonConfig {
-  const body = config.profiles[name]
+/** Body of profile `name` as a config layer: `description` dropped; `profile`/`profiles` are not allowed. */
+function profileLayer(profiles: AnonConfig['profiles'], name: string): Record<string, unknown> {
+  const body = profiles[name]
   if (!body) {
-    const known = Object.keys(config.profiles)
+    const known = Object.keys(profiles)
     throw new Error(`Unbekanntes Profil: ${name}. Vorhanden: ${known.length ? known.join(', ') : '(keine)'}`)
   }
   const { description: _description, ...rest } = body
   if ('profile' in rest || 'profiles' in rest) throw new Error(`Profil "${name}" darf profile/profiles nicht setzen`)
-  return validate({ ...(deepMerge(config, rest) as AnonConfig), profile: name }, `Profil "${name}"`)
+  return rest
 }
 
 /**
- * Layers, lowest first: defaults → `<home>/.config/forge-anon/config.yaml` → `<cwd>/anon.config.yaml` →
- * explicit path / `ANON_CONFIG` → the selected profile (`opts.profile` → `$ANON_PROFILE` → `profile` key).
+ * Layers, lowest first: defaults → `<home>/.config/forge-anon/config.yaml` → the selected profile →
+ * `<cwd>/anon.config.yaml` → explicit path / `ANON_CONFIG`. The profile is a user-level preset, so project
+ * and explicit files still win over it. It is chosen by `opts.profile` → `$ANON_PROFILE` → the `profile` key,
+ * and its body may come from any file.
  */
 export function loadConfig(opts: LoadConfigOptions = {}): { config: AnonConfig; sources: string[] } {
   const home = opts.home ?? os.homedir()
@@ -299,26 +303,33 @@ export function loadConfig(opts: LoadConfigOptions = {}): { config: AnonConfig; 
   ]
   if (explicit) candidates.push({ file: explicit, required: true })
 
+  const layers: { source: string; doc: unknown }[] = []
   let merged: unknown = structuredClone(DEFAULT_CONFIG)
-  const sources = ['defaults']
   for (const { file, required } of candidates) {
     if (!fs.existsSync(file)) {
       if (required) throw new Error(`Konfiguration nicht gefunden: ${file}`)
       continue
     }
+    const doc = readLayer(file)
     // Validate each layer on top of the lower ones so errors name the offending file.
-    merged = validate(deepMerge(merged, readLayer(file)), file)
-    sources.push(file)
+    merged = validate(deepMerge(merged, doc), file)
+    layers.push({ source: file, doc })
   }
-  let config = validate(merged, 'defaults')
-  const profile = opts.profile ?? env.ANON_PROFILE ?? config.profile
-  if (profile) {
-    config = applyProfile(config, profile)
-    sources.push(`profile:${profile}`)
-  } else {
-    delete config.profile
+  const all = validate(merged, 'defaults')
+  const profile = opts.profile ?? env.ANON_PROFILE ?? all.profile
+  if (!profile) {
+    delete all.profile
+    return { config: expandPaths(all, home), sources: ['defaults', ...layers.map(l => l.source)] }
   }
-  return { config: expandPaths(config, home), sources }
+
+  const body = profileLayer(all.profiles, profile)
+  const at = layers.length > 0 && layers[0]!.source === homeConfigPath(home) ? 1 : 0
+  layers.splice(at, 0, { source: `profile:${profile}`, doc: body })
+  let config: unknown = structuredClone(DEFAULT_CONFIG)
+  for (const l of layers) config = validate(deepMerge(config, l.doc), l.source === `profile:${profile}` ? `Profil "${profile}"` : l.source)
+  // `profiles` from every file, whatever their position relative to the profile layer.
+  const result = { ...validate(config, 'defaults'), profiles: all.profiles, profile }
+  return { config: expandPaths(result, home), sources: ['defaults', ...layers.map(l => l.source)] }
 }
 
 export type CliFlags = {

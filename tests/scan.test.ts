@@ -101,6 +101,21 @@ describe('scanText levels', () => {
   })
 })
 
+describe('scan.maxChars', () => {
+  test('only the head is scanned, cut at whitespace; chars still counts the whole text', async () => {
+    const c = config()
+    c.scan.maxChars = 30
+    const s = createScanner({ config: c, detectors: [fake(NEEDLES)] })
+    // 'Petra Schneider' straddles char 30; the cut falls before it, so it is not reported half.
+    const text = 'Olaf Scholz schrieb an Frau Petra Schneider in Berlin.'
+    writeFileSync(join(tmp, 'a.txt'), text)
+    const r = await s.scanFile(join(tmp, 'a.txt'))
+    expect(r.chars).toBe(text.length)
+    expect(r.scanned).toBe('Olaf Scholz schrieb an Frau'.length)
+    expect(r.findings.map(f => f.text)).toEqual(['Olaf Scholz'])
+  })
+})
+
 describe('walkFiles', () => {
   beforeEach(() => {
     mkdirSync(join(tmp, 'a/node_modules'), { recursive: true })
